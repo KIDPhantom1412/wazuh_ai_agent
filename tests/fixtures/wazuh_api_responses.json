@@ -1,0 +1,4 @@
+{
+    "api_info": {"data": {"title": "Wazuh API REST", "api_version": "4.14.1", "revision": "rc2", "license_name": "GPL 2.0", "license_url": "https://github.com/wazuh/wazuh/blob/v4.14.1/LICENSE", "hostname": "kid", "timestamp": "2026-01-19T09:58:46Z"}, "error": 0},
+    "agents_status_summary": {"data": {"connection": {"active": 0, "disconnected": 1, "never_connected": 0, "pending": 0, "total": 1}, "configuration": {"synced": 1, "not_synced": 0, "total": 1}}, "error": 0}
+}
