@@ -9,4 +9,4 @@ model = ChatOpenAI(
     base_url=settings.TEST_LLM_BASE_URL,
 )
 
-graph = get_demo_agent(model)
+demo_agent = get_demo_agent(model)
