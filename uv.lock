@@ -2320,6 +2320,7 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "langchain" },
+    { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "pydantic-settings" },
     { name = "requests" },
@@ -2330,7 +2331,6 @@ dev = [
     { name = "agentevals" },
     { name = "black" },
     { name = "hatch" },
-    { name = "langchain-openai" },
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "pytest" },
     { name = "requests-mock" },
@@ -2340,6 +2340,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "langchain", specifier = ">=1.2.6" },
+    { name = "langchain-openai", specifier = ">=1.1.7" },
     { name = "langgraph", specifier = ">=1.0.6" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "requests" },
@@ -2350,7 +2351,6 @@ dev = [
     { name = "agentevals", specifier = ">=0.0.9" },
     { name = "black", specifier = ">=26.1.0" },
     { name = "hatch", specifier = ">=1.16.3" },
-    { name = "langchain-openai", specifier = ">=1.1.7" },
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.11" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "requests-mock", specifier = ">=1.12.1" },
