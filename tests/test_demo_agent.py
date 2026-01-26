@@ -35,7 +35,7 @@ def test_demo_agent(demo_model):
         """.strip(),
             tool_call_id="call_1",
         ),
-        AIMessage(content="There is a total of **1 Wazuh agent**,."),
+        AIMessage(content="There is a total of **1 Wazuh agent**."),
     ]
     evaluation = evaluator(outputs=result["messages"], reference_outputs=reference_trajectory)
     assert evaluation["score"] is True
