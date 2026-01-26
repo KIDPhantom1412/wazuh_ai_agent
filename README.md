@@ -28,8 +28,8 @@ uv run langgrah dev
 
 ```bash
 cd wazuh_ai_agent
-uv run --group dev hatch test --all   # 测试所有python版本
-uv run --group dev hatch test --cover # 当前测试代码的覆盖率
+uv run hatch test --all   # 测试所有python版本
+uv run hatch test --cover # 当前测试代码的覆盖率
 ```
 
 ### 格式化

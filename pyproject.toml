@@ -45,12 +45,13 @@ dev = [
     "ruff>=0.14.13",
 ]
 
-# uv run --group dev hatch test --all multiple python versions, 
-# uv run --group dev hatch test --cover tests coverage.
+# uv run hatch test --all multiple python versions, 
+# uv run hatch test --cover tests coverage.
 [[tool.hatch.envs.hatch-test.matrix]]
 python = ["3.11", "3.12", "3.13"]
 
 [tool.hatch.envs.hatch-test]
+installer = "uv"
 extra-dependencies = [
     "agentevals>=0.0.9",
     "pytest>=9.0.2",
