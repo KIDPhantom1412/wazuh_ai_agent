@@ -38,25 +38,15 @@ packages = ["src/core", "src/wazuh_api", "src/agents"]
 dev = [
     "agentevals>=0.0.9",
     "black>=26.1.0",
-    "hatch>=1.16.3",
     "langgraph-cli[inmem]>=0.4.11",
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
     "requests-mock>=1.12.1",
     "ruff>=0.14.13",
 ]
 
-# uv run hatch test --all multiple python versions, 
-# uv run hatch test --cover tests coverage.
-[[tool.hatch.envs.hatch-test.matrix]]
-python = ["3.11", "3.12", "3.13"]
-
-[tool.hatch.envs.hatch-test]
-installer = "uv"
-extra-dependencies = [
-    "agentevals>=0.0.9",
-    "pytest>=9.0.2",
-    "requests-mock>=1.12.1",
-]
+[tool.coverage.run]
+omit = ["__*__.py", "*.pyc"]
 
 # uv run black .
 [tool.black]

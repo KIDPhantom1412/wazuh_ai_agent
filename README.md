@@ -28,8 +28,13 @@ uv run langgrah dev
 
 ```bash
 cd wazuh_ai_agent
-uv run hatch test --all   # 测试所有python版本
-uv run hatch test --cover # 当前测试代码的覆盖率
+# 分别测试python版本为3.11, 3.12, 3.13的测试
+uv run -p 3.11 pytest 
+uv run -p 3.12 pytest
+uv run -p 3.13 pytest
+# 覆盖率测试
+uv run pytest --cov=src
+uv run pytest --cov=src/agents  # 针对某个包测试覆盖率
 ```
 
 ### 格式化
