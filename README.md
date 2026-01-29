@@ -1,6 +1,6 @@
 ## Developer Guide
 
-开发者需要实现在开发环境下安装uv。
+开发者需要在开发环境下安装uv。
 
 ### 项目结构
 
@@ -10,7 +10,9 @@ WAZUH_AI_AGENT
 │  ├─agents
 │  ├─core
 │  └─wazuh_api
-└─tests
+├─tests
+├─pyproject.toml
+└─uv.lock
 ```
 
 ### 试运行
