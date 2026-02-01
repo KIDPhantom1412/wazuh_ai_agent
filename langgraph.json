@@ -1,7 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "demo_agent": "./src/agents/agent.py:demo_agent"
+    "demo_agent": "./src/agents/agent.py:demo_agent",
+    "indexer_agent": "./src/agents/agent.py:indexer_agent"
   },
   "env": ".env"
 }

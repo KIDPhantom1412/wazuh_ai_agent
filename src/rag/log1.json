@@ -1,0 +1,77 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.01.22",
+  "_id": "HlCb5JsBSVsQ_SVlhpg4",
+  "_version": 1,
+  "_score": null,
+  "_source": {
+    "predecoder": {
+      "hostname": "roy-virtual-machine",
+      "program_name": "sshd",
+      "timestamp": "Jan 12 02:18:58"
+    },
+    "input": {
+      "type": "log"
+    },
+    "agent": {
+      "ip": "192.168.109.135",
+      "name": "UbuntuSSH",
+      "id": "004"
+    },
+    "previous_output": "Jan 12 02:18:58 roy-virtual-machine sshd[11464]: Failed password for invalid user admin0 from 192.168.109.130 port 38218 ssh2\nJan 12 02:18:58 roy-virtual-machine sshd[11463]: Failed password for invalid user admin0 from 192.168.109.130 port 38204 ssh2",
+    "data": {
+      "srcuser": "admin0",
+      "srcip": "192.168.109.130"
+    },
+    "manager": {
+      "name": "does-virtual-machine"
+    },
+    "rule": {
+      "firedtimes": 3,
+      "mail": false,
+      "level": 10,
+      "description": "Multiple SSH login attempts using non-existent usernames.",
+      "groups": [
+        "local",
+        "syslog",
+        "sshd"
+      ],
+      "mitre": {
+        "technique": [
+          "Brute Force"
+        ],
+        "id": [
+          "T1110"
+        ],
+        "tactic": [
+          "Credential Access"
+        ]
+      },
+      "id": "5764",
+      "frequency": 3
+    },
+    "location": "journald",
+    "decoder": {
+      "parent": "sshd",
+      "name": "sshd"
+    },
+    "id": "1769066955.2675830",
+    "full_log": "Jan 12 02:18:58 roy-virtual-machine sshd[11467]: Failed password for invalid user admin0 from 192.168.109.130 port 38248 ssh2",
+    "timestamp": "2026-01-22T15:29:15.238+0800"
+  },
+  "fields": {
+    "timestamp": [
+      "2026-01-22T07:29:15.238Z"
+    ]
+  },
+  "highlight": {
+    "rule.id": [
+      "@opensearch-dashboards-highlighted-field@5764@/opensearch-dashboards-highlighted-field@"
+    ],
+    "agent.id": [
+      "@opensearch-dashboards-highlighted-field@004@/opensearch-dashboards-highlighted-field@"
+    ]
+  },
+  "sort": [
+    1769066955238
+  ]
+}
