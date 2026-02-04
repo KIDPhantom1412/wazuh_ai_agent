@@ -109,7 +109,11 @@ if __name__ == "__main__":
     indexer_agent = get_indexer_agent(model)
 
     for chunk in indexer_agent.stream(
-        {"messages": [{"role": "user", "content": "过去12小时内agent id为001的agent产生多少警告?"}]},
+        {
+            "messages": [
+                {"role": "user", "content": "过去12小时内agent id为001的agent产生多少警告?"}
+            ]
+        },
         stream_mode="values",
     ):
         latest_message = chunk["messages"][-1]
@@ -119,7 +123,11 @@ if __name__ == "__main__":
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
     for chunk in indexer_agent.stream(
-        {"messages": [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]},
+        {
+            "messages": [
+                {"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}
+            ]
+        },
         stream_mode="values",
     ):
         latest_message = chunk["messages"][-1]
