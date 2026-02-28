@@ -25,8 +25,8 @@ password = settings.WAZUH_INDEXER_PASSWORD
 PINECONE_API_KEY = settings.PINECONE_API_KEY
 os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
 
-LOG_FILE = r"src/rag/log1.json"
-KB_FILE = r"src/rag/rag0.json"
+LOG_FILE = r"documents/rag/log1.json"
+KB_FILE = r"documents/rag/rag0.json"
 
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
