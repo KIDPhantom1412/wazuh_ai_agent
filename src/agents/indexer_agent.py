@@ -47,7 +47,9 @@ def get_count_agent_alerts(agent_id, starttime, endtime):
     :param endtime: 查询的结束时间。默认为 "now"。支持相对或绝对时间。
     :return: 匹配条件的告警总数。
     """
-    count = count_agent_alerts(agent_id, starttime, endtime)
+
+    response_data = count_agent_alerts(agent_id, starttime, endtime)
+    count = response_data.get("count", 0)
 
     result = {
         "agent_id": agent_id,
@@ -66,7 +68,12 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
     :param x_limit: 返回的告警条数
     :param ruleId: 规则 ID (如 5710)，默认为 -1 (不进行规则过滤)
     """
-    alerts = agent_alerts(agent_id, x_limit, ruleId)
+
+    search_results = agent_alerts(agent_id, x_limit, ruleId)
+
+    hits = search_results.get("hits", {}).get("hits", [])
+    alerts = [hit["_source"] for hit in hits]
+
     return json.dumps(alerts)
 
 
@@ -78,7 +85,8 @@ def get_response_plan(query: str) -> str:
     :param query: 有关获取日志响应方案的的询问
     """
     # 获取知识库
-    documents = load_knowledge_base()
+    KB_FILE = r"documents/rag/rag0.json"
+    documents = load_knowledge_base(KB_FILE)
     vectorstore = setup_vectorstore(documents)
 
     docs = vectorstore.similarity_search(query, k=3)
@@ -108,6 +116,7 @@ if __name__ == "__main__":
     )
     indexer_agent = get_indexer_agent(model)
 
+    print("\n--- Q1: 获取告警数量 ---")
     for chunk in indexer_agent.stream(
         {
             "messages": [
@@ -122,12 +131,11 @@ if __name__ == "__main__":
         elif latest_message.tool_calls:
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
+    messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
+
+    print("\n--- Q2: 获取告警 ---")
     for chunk in indexer_agent.stream(
-        {
-            "messages": [
-                {"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}
-            ]
-        },
+        {"messages": messages},
         stream_mode="values",
     ):
         latest_message = chunk["messages"][-1]
@@ -136,12 +144,13 @@ if __name__ == "__main__":
         elif latest_message.tool_calls:
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
-    log_file = r"src/rag/log1.json"
-    with open(log_file, encoding="utf-8") as f:
-        log_data = json.load(f)
-    query = f"请根据日志的信息：{log_data}，提供具体的安全响应措施"
+    messages = chunk["messages"]
+
+    print("\n--- Q3: 请求响应措施 ---")
+    messages.append({"role": "user", "content": "基于刚刚获取的告警日志，提供具体的安全响应措施"})
+
     for chunk in indexer_agent.stream(
-        {"messages": [{"role": "user", "content": query}]},
+        {"messages": messages},
         stream_mode="values",
     ):
         latest_message = chunk["messages"][-1]

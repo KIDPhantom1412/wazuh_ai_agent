@@ -7,8 +7,6 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import requests
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# from langchain_pinecone import PineconeVectorStore
 from langchain_pinecone import Pinecone as PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 from requests.auth import HTTPBasicAuth
@@ -24,10 +22,6 @@ username = settings.WAZUH_INDEXER_USER
 password = settings.WAZUH_INDEXER_PASSWORD
 PINECONE_API_KEY = settings.PINECONE_API_KEY
 os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
-
-LOG_FILE = r"documents/rag/log1.json"
-KB_FILE = r"documents/rag/rag0.json"
-
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
@@ -57,7 +51,7 @@ def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
     )
 
     logger.info("Get the number of alerts successfully")
-    return response.json().get("count", 0)
+    return response.json()
 
 
 def agent_alerts(agent_id, x_limit=5, ruleId=-1):
@@ -88,15 +82,11 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1):
         verify=False,
     )
 
-    search_results = response.json()
-    hits = search_results.get("hits", {}).get("hits", [])
-    alerts = [hit["_source"] for hit in hits]
-
-    logger.info(f"Get {len(alerts)}  alerts from Agent: {agent_id} successfully")
-    return alerts
+    logger.info(f"Get alerts response from Agent: {agent_id} successfully")
+    return response.json()
 
 
-def load_knowledge_base():
+def load_knowledge_base(KB_FILE):
     """
     加载知识库文件并转换为可嵌入的文档
     """
@@ -193,7 +183,10 @@ if __name__ == "__main__":
 
     # 测试agent_alerts()
     # 查询ID为004的Agent中规则ID为5764的告警
-    ssh_alerts = agent_alerts("004", x_limit=3, ruleId=5764)
+    search_response = agent_alerts("004", x_limit=3, ruleId=5764)
+    print("原始的全部告警日志：", search_response)
+    # hits = search_response.get("hits", {}).get("hits", [])
+    # ssh_alerts = [hit["_source"] for hit in hits]
     # for i, alert in enumerate(ssh_alerts):
     #     print('*' * 20)
     #     print(f"\n--- 告警 #{i + 1} ---")
@@ -202,7 +195,7 @@ if __name__ == "__main__":
     #     print(f"级别: {alert.get('rule', {}).get('level')}")
     #     print(f"描述: {alert.get('rule', {}).get('description')}")
     #     print(f"alert:{alert}\n")
-    print(ssh_alerts)
 
-    # documents = load_knowledge_base()
+    # KB_FILE = r"documents/rag/rag0.json"
+    # documents = load_knowledge_base(KB_FILE)
     # vectorstore = setup_vectorstore(documents)
