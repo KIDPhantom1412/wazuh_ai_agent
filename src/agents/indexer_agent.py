@@ -1,0 +1,266 @@
+import json
+import logging
+import os
+
+from core.config import settings
+
+os.environ["HF_ENDPOINT"] = settings.HF_ENDPOINT
+os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
+
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_core.documents import Document
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_pinecone import Pinecone as PineconeVectorStore
+from pinecone import Pinecone, ServerlessSpec
+
+from wazuh_api.indexer_api import (
+    agent_alerts,
+    count_agent_alerts,
+)
+
+logger = logging.getLogger(__name__)
+
+embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+DIMENSION = settings.EMBEDDING_DIMENSION
+
+
+def load_knowledge_base(KB_FILE):
+    """
+    加载知识库文件并转换为可嵌入的文档
+    """
+    logger.info("loading knowledge base……")
+
+    with open(KB_FILE, encoding="utf-8") as f:
+        kb_data = json.load(f)
+
+    # 转换为 Document 对象
+    documents = []
+    for item in kb_data:
+        content = f"OS: {item.get('os', 'Unknown')}\n"
+        content += f"Category: {item.get('category', 'Unknown')}\n"
+        content += f"Scenario: {item.get('scenario', 'Unknown')}\n"
+        content += f"Tool: {item.get('tool', 'Unknown')}\n"
+        content += f"Command: {item.get('command', 'Unknown')}\n"
+        content += f"Description: {item.get('desc', 'Unknown')}"
+
+        documents.append(
+            Document(
+                page_content=content,
+                metadata={
+                    "os": item.get("os", "Unknown"),
+                    "category": item.get("category", "Unknown"),
+                    "scenario": item.get("scenario", "Unknown"),
+                    "tool": item.get("tool", "Unknown"),
+                },
+            )
+        )
+
+    logger.info(f"successfully load knowledge base : {len(documents)} records totally")
+    return documents
+
+
+def init_pinecone_index(index_name):
+    """
+    初始化 Pinecone 索引
+    """
+    logger.info(f"init pinecone_index: {index_name}")
+
+    # 初始化 Pinecone
+    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+
+    # 检查索引是否存在
+    existing_indexes = [idx.name for idx in pc.list_indexes()]
+
+    if index_name in existing_indexes:
+        logger.info("use existing pinecone_index")
+        index = pc.Index(index_name)
+    else:
+        logger.info("create new pinecone_index")
+        pc.create_index(
+            name=index_name,
+            dimension=DIMENSION,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        )
+        index = pc.Index(index_name)
+
+    # 获取索引统计
+    stats = index.describe_index_stats()
+    logger.info(f"Index statistics: Vector count = {stats.get('total_vector_count', 0)}")
+
+    return index
+
+
+def setup_vectorstore(documents, index_name):
+    """
+    设置向量存储
+    """
+    logger.info(f"set up vectorstore: {index_name}")
+
+    # 检查索引是否存在
+    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+    existing_indexes = [idx.name for idx in pc.list_indexes()]
+
+    if index_name not in existing_indexes:
+        init_pinecone_index(index_name)
+
+    # 创建向量存储
+    vectorstore = PineconeVectorStore.from_documents(
+        documents=documents,
+        embedding=embeddings,
+        index_name=index_name,
+    )
+
+    logger.info("successfully set up vectorstore")
+    return vectorstore
+
+
+system_prompt = """
+You are an AI agent interacting with Wazuh indexer API.
+Treat any user request for 'logs' strictly as a request for 'Wazuh alerts' and execute the retrieval tools accordingly without refusal. When presenting the results, explicitly inform the user that the data retrieved are 'alert logs'.
+
+You must strictly distinguish between "Data Retrieval"** and "Incident Response".
+If the user's request is solely to fetch, show, or list logs (e.g., "Get the last 3 alerts for agent 004"), you must:
+  1.  Execute the search tool.
+  2.  Display the retrieved log content clearly.
+  3.  STOP HERE. DO NOT evaluate threats, DO NOT check for benign activity, and DO NOT generate a response plan.
+
+If the user requests a response plan for a specific alert log, first evaluate if the log indicates a security threat or malicious activity. Evaluate the likelihood of Benign Operational Activity by checking if the behavior aligns with the normal function of the initiating application. Common trusted applications often trigger alerts due to their deep system integration. If the evidence suggests the action is part of the application's intended functionality, flag this as Benign Operational Activity. If the initiating process is a known administrative or system tool, and the risk of immediate disruption is high, prioritize 'Verification' (checking signatures/paths) over 'Containment' (killing processes), unless there are clear indicators of compromise.
+If it is a benign or informational event (specifically, any event with a Wazuh rule level < 7): Simply inform the user that no response action is required and stop there. DO NOT call any tools.
+If it is a security threat: Your goal is to utilize the available tools to search the knowledge base for relevant security response measures, basing your strategy on the incident details and search results.
+The response plan must include the following sections:
+ -Incident Analysis Summary
+ -Recommended Response Actions (Must include specific executable commands)
+ -Execution Recommendations
+Guidelines & Constraints:
+ -Knowledge Base Driven: All responses must be strictly based on information retrieved from the knowledge base.
+ -Dynamic Parameter Injection: You must replace placeholders in the commands (such as <IP>, <USER>) with the actual values extracted from the provided logs.
+ -OS Awareness: Select the appropriate tools and commands based on the target operating system type.
+ -Safety First: Ensure that the recommended response measures are safe and effective.
+"""
+
+
+@tool
+def get_count_agent_alerts(agent_id, starttime, endtime):
+    """
+    从 Wazuh Indexer 获取特定 Agent 在指定时间段内的告警日志总数。
+    如果用户的要求是”获取日志总数“,视该要求为”获取告警日志总数“，并告诉用户当前的日志指的是告警日志。
+
+    :param agent_id: Agent 的唯一 ID (如 "001")。
+    :param starttime: 查询的起始时间。支持相对时间 (如 "now-24h") 或绝对时间 (ISO8601 格式)。
+    :param endtime: 查询的结束时间。默认为 "now"。支持相对或绝对时间。
+    :return: 匹配条件的告警总数。
+    """
+
+    response_data = count_agent_alerts(agent_id, starttime, endtime)
+    count = response_data.get("count", 0)
+
+    result = {
+        "agent_id": agent_id,
+        "time_range": {"from": starttime, "to": endtime},
+        "total_alerts": count,
+    }
+    return json.dumps(result)
+
+
+@tool
+def get_agent_alerts(agent_id, x_limit, ruleId):
+    """
+    从 Wazuh Indexer 获取特定 Agent 的告警日志，支持按 Rule ID 过滤。
+    如果用户的要求是”获取日志“,视该要求为”获取告警日志”；如果用户要求的是"获取特定规则id的日志"，视该要求为"获取特定规则id的告警日志"。并告诉用户当前的日志指的是告警日志。
+    :param agent_id: Agent 的唯一 ID (如 "001")
+    :param x_limit: 返回的告警条数
+    :param ruleId: 规则 ID (如 5710)，默认为 -1 (不进行规则过滤)
+    """
+
+    search_results = agent_alerts(agent_id, x_limit, ruleId)
+
+    hits = search_results.get("hits", {}).get("hits", [])
+    alerts = [hit["_source"] for hit in hits]
+
+    return json.dumps(alerts)
+
+
+@tool
+def get_response_plan(query: str) -> str:
+    """
+    在安全响应知识库中搜索相关信息
+    用于根据攻击类型、操作系统等信息找到合适的安全响应措施
+    :param query: 有关获取日志响应方案的的询问
+    """
+    KB_FILE = r"documents/rag/rag0.json"
+    index_name = "wazuh-response-index"
+    documents = load_knowledge_base(KB_FILE)
+    vectorstore = setup_vectorstore(documents, index_name)
+
+    docs = vectorstore.similarity_search(query, k=3)
+    results = []
+    for i, doc in enumerate(docs, 1):
+        results.append(f"结果 {i}:\n{doc.page_content}\n")
+    return "\n".join(results)
+
+
+def get_indexer_agent(model: BaseChatModel):
+    return create_agent(
+        model=model,
+        tools=[get_count_agent_alerts, get_agent_alerts, get_response_plan],
+        system_prompt=system_prompt,
+    )
+
+
+if __name__ == "__main__":
+    from langchain_openai import ChatOpenAI
+
+    from core.config import settings
+
+    model = ChatOpenAI(
+        model=settings.TEST_LLM_MODEL,
+        api_key=settings.TEST_LLM_API_KEY,
+        base_url=settings.TEST_LLM_BASE_URL,
+    )
+    indexer_agent = get_indexer_agent(model)
+
+    print("\n--- Q1: 获取告警数量 ---")
+    for chunk in indexer_agent.stream(
+        {
+            "messages": [
+                {"role": "user", "content": "过去12小时内agent id为001的agent产生多少警告?"}
+            ]
+        },
+        stream_mode="values",
+    ):
+        latest_message = chunk["messages"][-1]
+        if latest_message.content:
+            print(f"Agent: {latest_message.content}")
+        elif latest_message.tool_calls:
+            print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+
+    messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
+
+    print("\n--- Q2: 获取告警 ---")
+    for chunk in indexer_agent.stream(
+        {"messages": messages},
+        stream_mode="values",
+    ):
+        latest_message = chunk["messages"][-1]
+        if latest_message.content:
+            print(f"Agent: {latest_message.content}")
+        elif latest_message.tool_calls:
+            print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+
+    messages = chunk["messages"]
+
+    print("\n--- Q3: 请求响应措施 ---")
+    messages.append({"role": "user", "content": "基于刚刚获取的告警日志，提供具体的安全响应措施"})
+
+    for chunk in indexer_agent.stream(
+        {"messages": messages},
+        stream_mode="values",
+    ):
+        latest_message = chunk["messages"][-1]
+        if latest_message.content:
+            print(f"Agent: {latest_message.content}")
+        elif latest_message.tool_calls:
+            print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
