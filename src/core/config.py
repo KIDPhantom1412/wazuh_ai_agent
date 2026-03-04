@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     TEST_LLM_API_KEY: str | None
     TEST_LLM_BASE_URL: str | None
 
+    EMBEDDING_MODEL: str | None
+    EMBEDDING_DIMENSION: int = 384
+    HF_ENDPOINT: str = "https://hf-mirror.com"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

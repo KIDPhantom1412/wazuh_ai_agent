@@ -1,15 +1,121 @@
 import json
+import logging
+import os
+
+from core.config import settings
+
+os.environ["HF_ENDPOINT"] = settings.HF_ENDPOINT
+os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
 
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_pinecone import Pinecone as PineconeVectorStore
+from pinecone import Pinecone, ServerlessSpec
 
-from wazuh_api.indexer_tools import (
+from wazuh_api.indexer_api import (
     agent_alerts,
     count_agent_alerts,
-    load_knowledge_base,
-    setup_vectorstore,
 )
+
+logger = logging.getLogger(__name__)
+
+embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+DIMENSION = settings.EMBEDDING_DIMENSION
+
+
+def load_knowledge_base(KB_FILE):
+    """
+    加载知识库文件并转换为可嵌入的文档
+    """
+    logger.info("loading knowledge base……")
+
+    with open(KB_FILE, encoding="utf-8") as f:
+        kb_data = json.load(f)
+
+    # 转换为 Document 对象
+    documents = []
+    for item in kb_data:
+        content = f"OS: {item.get('os', 'Unknown')}\n"
+        content += f"Category: {item.get('category', 'Unknown')}\n"
+        content += f"Scenario: {item.get('scenario', 'Unknown')}\n"
+        content += f"Tool: {item.get('tool', 'Unknown')}\n"
+        content += f"Command: {item.get('command', 'Unknown')}\n"
+        content += f"Description: {item.get('desc', 'Unknown')}"
+
+        documents.append(
+            Document(
+                page_content=content,
+                metadata={
+                    "os": item.get("os", "Unknown"),
+                    "category": item.get("category", "Unknown"),
+                    "scenario": item.get("scenario", "Unknown"),
+                    "tool": item.get("tool", "Unknown"),
+                },
+            )
+        )
+
+    logger.info(f"successfully load knowledge base : {len(documents)} records totally")
+    return documents
+
+
+def init_pinecone_index(index_name):
+    """
+    初始化 Pinecone 索引
+    """
+    logger.info(f"init pinecone_index: {index_name}")
+
+    # 初始化 Pinecone
+    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+
+    # 检查索引是否存在
+    existing_indexes = [idx.name for idx in pc.list_indexes()]
+
+    if index_name in existing_indexes:
+        logger.info("use existing pinecone_index")
+        index = pc.Index(index_name)
+    else:
+        logger.info("create new pinecone_index")
+        pc.create_index(
+            name=index_name,
+            dimension=DIMENSION,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        )
+        index = pc.Index(index_name)
+
+    # 获取索引统计
+    stats = index.describe_index_stats()
+    logger.info(f"Index statistics: Vector count = {stats.get('total_vector_count', 0)}")
+
+    return index
+
+
+def setup_vectorstore(documents, index_name):
+    """
+    设置向量存储
+    """
+    logger.info(f"set up vectorstore: {index_name}")
+
+    # 检查索引是否存在
+    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+    existing_indexes = [idx.name for idx in pc.list_indexes()]
+
+    if index_name not in existing_indexes:
+        init_pinecone_index(index_name)
+
+    # 创建向量存储
+    vectorstore = PineconeVectorStore.from_documents(
+        documents=documents,
+        embedding=embeddings,
+        index_name=index_name,
+    )
+
+    logger.info("successfully set up vectorstore")
+    return vectorstore
+
 
 system_prompt = """
 You are an AI agent interacting with Wazuh indexer API.
@@ -84,10 +190,10 @@ def get_response_plan(query: str) -> str:
     用于根据攻击类型、操作系统等信息找到合适的安全响应措施
     :param query: 有关获取日志响应方案的的询问
     """
-    # 获取知识库
     KB_FILE = r"documents/rag/rag0.json"
+    index_name = "wazuh-response-index"
     documents = load_knowledge_base(KB_FILE)
-    vectorstore = setup_vectorstore(documents)
+    vectorstore = setup_vectorstore(documents, index_name)
 
     docs = vectorstore.similarity_search(query, k=3)
     results = []
