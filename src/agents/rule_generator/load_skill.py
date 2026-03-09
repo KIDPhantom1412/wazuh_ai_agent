@@ -6,7 +6,7 @@ from langchain.tools import tool
 
 logger = logging.getLogger(__name__)
 
-RULE_SYNTAX_FILE = Path(__file__).parent / "rule_syntax.md"
+RULE_SYNTAX_FILE = Path(__file__).parents[3] / "documents/skill/rule_syntax.md"
 
 _skills_cache: dict[str, str] | None = None
 

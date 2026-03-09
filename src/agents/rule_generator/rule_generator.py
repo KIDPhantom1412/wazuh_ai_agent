@@ -2,7 +2,7 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from agents.rule_generator.skills import get_skill_descriptions, load_skill
+from agents.rule_generator.load_skill import get_skill_descriptions, load_skill
 from wazuh_api.server_api import get_rule_info
 
 system_prompt = r"""You are a Wazuh rule generation assistant. Your task is to help users generate, modify, and optimize Wazuh rules based on their requirements.
