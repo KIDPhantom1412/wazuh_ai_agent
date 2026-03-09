@@ -4,7 +4,7 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from wazuh_api.tools import get_agents_status_summary, get_wazuh_server_api_info
+from wazuh_api.server_api import get_agents_status_summary, get_wazuh_server_api_info
 
 system_prompt = """
 You are an AI agent interacting with Wazuh server API.

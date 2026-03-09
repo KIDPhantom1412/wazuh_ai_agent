@@ -28,7 +28,7 @@ def demo_wazuh_api_response():
 def test_get_wazuh_server_api_info(demo_wazuh_api_response, requests_mock):
     demo_api_info = demo_wazuh_api_response("api_info")
     requests_mock.get(re.compile(r"^https?://[^/:]+:\d+/?$"), json=demo_api_info)
-    from wazuh_api.tools import get_wazuh_server_api_info
+    from wazuh_api.server_api import get_wazuh_server_api_info
 
     response = get_wazuh_server_api_info()
     assert "api_version" in response["data"]
@@ -42,7 +42,7 @@ def test_get_agents_status_summary(demo_wazuh_api_response, requests_mock):
         re.compile(r"^https?://[^/:]+:\d+/agents/summary/status/?$"),
         json=demo_agents_status_summary,
     )
-    from wazuh_api.tools import get_agents_status_summary
+    from wazuh_api.server_api import get_agents_status_summary
 
     response = get_agents_status_summary()
     assert "connection" in response["data"]
@@ -55,7 +55,7 @@ def test_get_rule_info_exists(demo_wazuh_api_response, requests_mock):
     requests_mock.get(
         re.compile(r"^https?://[^/:]+:\d+/rules\?rule_ids=1002$"), json=demo_rule_info
     )
-    from wazuh_api.tools import get_rule_info
+    from wazuh_api.server_api import get_rule_info
 
     response = get_rule_info(1002)
     assert response["data"]["total_affected_items"] == 1
@@ -68,7 +68,7 @@ def test_get_rule_info_not_exists(demo_wazuh_api_response, requests_mock):
     requests_mock.get(
         re.compile(r"^https?://[^/:]+:\d+/rules\?rule_ids=9999$"), json=demo_rule_info
     )
-    from wazuh_api.tools import get_rule_info
+    from wazuh_api.server_api import get_rule_info
 
     response = get_rule_info(9999)
     assert response["data"]["total_affected_items"] == 0
