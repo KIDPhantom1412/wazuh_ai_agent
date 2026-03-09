@@ -47,3 +47,24 @@ def test_get_agents_status_summary(demo_wazuh_api_response, requests_mock):
     response = get_agents_status_summary()
     assert "connection" in response["data"]
     assert "configuration" in response["data"]
+
+
+@pytest.mark.usefixtures("mock_auth")
+def test_get_rule_info_exists(demo_wazuh_api_response, requests_mock):
+    demo_rule_info = demo_wazuh_api_response("rule_info_exists")
+    requests_mock.get(re.compile(r"^https?://[^/:]+:\d+/rules\?rule_ids=1002$"), json=demo_rule_info)
+    from wazuh_api.tools import get_rule_info
+
+    response = get_rule_info(1002)
+    assert response["data"]["total_affected_items"] == 1
+    assert response["data"]["affected_items"][0]["id"] == 1002
+
+
+@pytest.mark.usefixtures("mock_auth")
+def test_get_rule_info_not_exists(demo_wazuh_api_response, requests_mock):
+    demo_rule_info = demo_wazuh_api_response("rule_info_not_exists")
+    requests_mock.get(re.compile(r"^https?://[^/:]+:\d+/rules\?rule_ids=9999$"), json=demo_rule_info)
+    from wazuh_api.tools import get_rule_info
+
+    response = get_rule_info(9999)
+    assert response["data"]["total_affected_items"] == 0

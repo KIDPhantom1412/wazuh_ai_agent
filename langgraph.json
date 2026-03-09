@@ -1,7 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "demo_agent": "./src/agents/agent.py:demo_agent"
+    "demo_agent": "./src/agents/agent.py:demo_agent",
+    "rule_generator": "./src/agents/agent.py:rule_generator"
   },
   "env": ".env"
 }

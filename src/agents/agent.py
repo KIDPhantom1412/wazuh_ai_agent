@@ -1,6 +1,7 @@
 from langchain_openai import ChatOpenAI
 
 from agents.demo_agent import get_demo_agent
+from agents.rule_generator.rule_generator import get_rule_generator_agent
 from core.config import settings
 
 model = ChatOpenAI(
@@ -10,3 +11,4 @@ model = ChatOpenAI(
 )
 
 demo_agent = get_demo_agent(model)
+rule_generator = get_rule_generator_agent(model)
