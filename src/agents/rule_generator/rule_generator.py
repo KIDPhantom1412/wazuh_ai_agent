@@ -2,10 +2,10 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from agents.rule_generator.skills import load_skill, get_skill_descriptions
+from agents.rule_generator.skills import get_skill_descriptions, load_skill
 from wazuh_api.tools import get_rule_info
 
-system_prompt = """You are a Wazuh rule generation assistant. Your task is to help users generate, modify, and optimize Wazuh rules based on their requirements.
+system_prompt = r"""You are a Wazuh rule generation assistant. Your task is to help users generate, modify, and optimize Wazuh rules based on their requirements.
 
 ## Basic Wazuh Rule Concepts
 
@@ -128,10 +128,10 @@ To verify if a rule ID is already in use, use the `check_rule_id_exists` tool.""
 @tool
 def check_rule_id_exists(rule_id: int) -> str:
     """Check if a Wazuh rule ID is already in use.
-    
+
     Args:
         rule_id: The rule ID to check (e.g., 100001).
-        
+
     Returns:
         A message indicating if the rule ID exists or not.
     """
@@ -154,14 +154,11 @@ def get_rule_generator_agent(model: BaseChatModel):
         A configured agent for generating Wazuh rules
     """
     skills_list = "\n".join(
-        f"- {skill['name']}: {skill['description']}" 
-        for skill in get_skill_descriptions()
+        f"- {skill['name']}: {skill['description']}" for skill in get_skill_descriptions()
     )
-    
+
     formatted_prompt = system_prompt.format(skills_list=skills_list)
-    
+
     return create_agent(
-        model=model,
-        tools=[load_skill, check_rule_id_exists],
-        system_prompt=formatted_prompt
+        model=model, tools=[load_skill, check_rule_id_exists], system_prompt=formatted_prompt
     )

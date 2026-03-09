@@ -34,6 +34,7 @@ def get_agents_status_summary():
     logger.info("Get agents status summary successfully")
     return response.json()
 
+
 def get_agents_summary():
     """Get summary of agents."""
     logger.info("Getting agents summary")
@@ -43,6 +44,7 @@ def get_agents_summary():
     )
     logger.info("Get agents summary successfully")
     return response.json()
+
 
 def list_agents(pretty: bool = False):
     """List all agents."""
@@ -56,6 +58,7 @@ def list_agents(pretty: bool = False):
     logger.info("List all agents successfully")
     return response.json()
 
+
 def get_agents_os_summary():
     """Get summary of agents operating systems."""
     logger.info("Getting agents OS summary")
@@ -67,6 +70,7 @@ def get_agents_os_summary():
     )
     logger.info("Get agents OS summary successfully")
     return response.json()
+
 
 def get_agents_overview():
     """Get overview of agents."""
@@ -80,6 +84,7 @@ def get_agents_overview():
     logger.info("Get agents overview successfully")
     return response.json()
 
+
 def get_rule_info(rule_id: int):
     """Get information about a specific rule by its ID."""
     logger.info(f"Getting rule information for rule ID: {rule_id}")
@@ -91,6 +96,7 @@ def get_rule_info(rule_id: int):
     )
     logger.info(f"Get rule information for rule ID {rule_id} successfully")
     return response.json()
+
 
 def get_config_agentless():
     """Get agentless configuration."""
