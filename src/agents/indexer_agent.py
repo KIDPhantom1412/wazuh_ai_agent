@@ -190,7 +190,7 @@ def get_response_plan(query: str) -> str:
     用于根据攻击类型、操作系统等信息找到合适的安全响应措施
     :param query: 有关获取日志响应方案的的询问
     """
-    KB_FILE = r"documents/rag/rag0.json"
+    KB_FILE = r"src/documents/rag/rag0.json"
     index_name = "wazuh-response-index"
     documents = load_knowledge_base(KB_FILE)
     vectorstore = setup_vectorstore(documents, index_name)
