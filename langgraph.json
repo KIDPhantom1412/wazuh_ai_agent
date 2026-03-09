@@ -2,7 +2,7 @@
   "dependencies": ["."],
   "graphs": {
     "demo_agent": "./src/agents/agent.py:demo_agent",
-    "rule_generator": "./src/agents/agent.py:rule_generator"
+    "indexer_agent": "./src/agents/agent.py:indexer_agent"
   },
   "env": ".env"
 }
