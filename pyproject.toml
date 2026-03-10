@@ -94,3 +94,8 @@ ignore = [
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::urllib3.exceptions.InsecureRequestWarning",
+]
