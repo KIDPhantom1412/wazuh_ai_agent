@@ -23,7 +23,7 @@ def test_count_agent_alerts(demo_wazuh_api_response, requests_mock):
     )
     from wazuh_api.indexer_api import count_agent_alerts
 
-    response = count_agent_alerts("001","now-1h", "now")
+    response = count_agent_alerts("001", "now-1h", "now")
     assert response["count"] == 2116
 
 
@@ -35,7 +35,7 @@ def test_agent_alerts(demo_wazuh_api_response, requests_mock):
     )
     from wazuh_api.indexer_api import agent_alerts
 
-    response = agent_alerts("004",x_limit=1, ruleId=5764)
+    response = agent_alerts("004", x_limit=1, ruleId=5764)
     hits = response.get("hits", {}).get("hits", [])
     assert len(hits) == 1
     assert hits[0]["_source"]["agent"]["id"] == "004"
@@ -50,7 +50,7 @@ def test_agent_archives(demo_wazuh_api_response, requests_mock):
     )
     from wazuh_api.indexer_api import agent_archives
 
-    response = agent_archives("005",keyword="whoami", x_limit=1)
+    response = agent_archives("005", keyword="whoami", x_limit=1)
     hits = response.get("hits", {}).get("hits", [])
     assert len(hits) == 1
     assert hits[0]["_source"]["agent"]["id"] == "005"

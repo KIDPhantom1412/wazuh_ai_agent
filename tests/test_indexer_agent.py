@@ -21,8 +21,9 @@ def test_indexer_agent(demo_model):
     evaluator = create_trajectory_match_evaluator(
         trajectory_match_mode="strict",
     )
-    
+
     from agents.indexer_agent import get_indexer_agent
+
     agent = get_indexer_agent(demo_model)
 
     result = agent.invoke(

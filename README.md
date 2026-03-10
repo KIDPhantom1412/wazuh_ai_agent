@@ -19,7 +19,7 @@ WAZUH_AI_AGENT
 
 ```bash
 cd wazuh_ai_agent
-uv run langgrah dev
+uv run langgraph dev
 ```
 
 ### 测试

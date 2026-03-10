@@ -1,0 +1,178 @@
+[
+    {
+        "os": "Linux",
+        "category": "Network Block",
+        "scenario": "Block Malicious IP (iptables)",
+        "tool": "iptables",
+        "command": "iptables -I INPUT -s <IP> -j DROP -m comment --comment 'Block_Malicious_IP'",
+        "desc": "Immediately insert a rule at the top of the firewall to drop all packets from a specific IP."
+    },
+    {
+        "os": "Linux",
+        "category": "Network Block",
+        "scenario": "Block Malicious IP (Firewalld)",
+        "tool": "firewall-cmd",
+        "command": "firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"<IP>\" reject'",
+        "desc": "Permanently reject an IP on systems using Firewalld (e.g., CentOS)."
+    },
+    {
+        "os": "Linux",
+        "category": "Network Isolation",
+        "scenario": "Disconnect Network Connection",
+        "tool": "ip",
+        "command": "ip link set eth0 down",
+        "desc": "Emergency network disconnection by shutting down the network interface (replace eth0 with actual interface name)."
+    },
+    {
+        "os": "Windows",
+        "category": "Network Block",
+        "scenario": "Block Malicious IP (PowerShell)",
+        "tool": "PowerShell",
+        "command": "New-NetFirewallRule -DisplayName 'Block <IP>' -Direction Inbound -LocalPort Any -Protocol TCP -Action Block -RemoteAddress <IP>",
+        "desc": "Create a Windows firewall inbound rule to block a specific IP."
+    },
+    {
+        "os": "Windows",
+        "category": "Network Analysis",
+        "scenario": "View and Disconnect Suspicious TCP Connections",
+        "tool": "PowerShell",
+        "command": "Get-NetTCPConnection -RemoteAddress <IP> | Stop-Process -Id {$_.OwningProcess} -Force",
+        "desc": "Find local processes connected to malicious IPs and forcefully terminate them."
+    },
+    {
+        "os": "Linux",
+        "category": "Process Kill",
+        "scenario": "Force Terminate High-Usage or Malicious Processes",
+        "tool": "kill",
+        "command": "kill -9 $(pgrep -f '<PROCESS_NAME>')",
+        "desc": "Forcefully kill all processes matching a process name pattern."
+    },
+    {
+        "os": "Linux",
+        "category": "Process Pause",
+        "scenario": "Pause Suspicious Process (for Forensics)",
+        "tool": "kill",
+        "command": "kill -STOP <PID>",
+        "desc": "Suspend a process without killing it to prevent further damage while preserving memory for analysis."
+    },
+    {
+        "os": "Windows",
+        "category": "Process Kill",
+        "scenario": "Force Terminate Malicious Process",
+        "tool": "PowerShell",
+        "command": "Stop-Process -Name '<PROCESS_NAME>' -Force",
+        "desc": "Forcefully stop a process by its name."
+    },
+    {
+        "os": "Windows",
+        "category": "Process Tree",
+        "scenario": "Terminate Process Tree (including child processes)",
+        "tool": "taskkill",
+        "command": "taskkill /IM <PROCESS_NAME>.exe /T /F",
+        "desc": "Forcefully terminate a specified process and all its child processes."
+    },
+    {
+        "os": "Linux",
+        "category": "Account Lock",
+        "scenario": "Lock Compromised User Account",
+        "tool": "passwd",
+        "command": "passwd -l <USERNAME>",
+        "desc": "Lock a user's password to prevent login."
+    },
+    {
+        "os": "Linux",
+        "category": "Session Kill",
+        "scenario": "Terminate User's Active Sessions",
+        "tool": "pkill",
+        "command": "pkill -KILL -u <USERNAME>",
+        "desc": "Forcefully terminate all processes for a user and log out their sessions."
+    },
+    {
+        "os": "Windows",
+        "category": "Account Disable",
+        "scenario": "Disable Windows Account",
+        "tool": "PowerShell",
+        "command": "Disable-LocalUser -Name '<USERNAME>'",
+        "desc": "Disable a local user account to prevent login."
+    },
+    {
+        "os": "Windows",
+        "category": "Password Reset",
+        "scenario": "Force Reset Account Password",
+        "tool": "Net",
+        "command": "net user <USERNAME> <NEW_PASSWORD_123!>",
+        "desc": "Forcefully change a password to regain control when account cannot be disabled."
+    },
+    {
+        "os": "Linux",
+        "category": "Persistence",
+        "scenario": "Remove Malicious Cron Jobs",
+        "tool": "crontab",
+        "command": "crontab -r -u <USERNAME>",
+        "desc": "Clear all scheduled tasks for a specified user."
+    },
+    {
+        "os": "Linux",
+        "category": "Persistence",
+        "scenario": "Remove Immutable Attribute",
+        "tool": "chattr",
+        "command": "chattr -i <FILE_PATH>",
+        "desc": "Unlock a malicious file that cannot be deleted, then delete it."
+    },
+    {
+        "os": "Windows",
+        "category": "Persistence",
+        "scenario": "Remove Malicious Scheduled Tasks",
+        "tool": "PowerShell",
+        "command": "Unregister-ScheduledTask -TaskName '<TASK_NAME>' -Confirm:$false",
+        "desc": "Forcefully unregister and delete a specified scheduled task."
+    },
+    {
+        "os": "Windows",
+        "category": "Persistence",
+        "scenario": "Clean Registry Startup Items",
+        "tool": "PowerShell",
+        "command": "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '<MALICIOUS_KEY>'",
+        "desc": "Delete registry startup items for the current user."
+    },
+    {
+        "os": "Linux",
+        "category": "File Quarantine",
+        "scenario": "Webshell File Containment (Lock)",
+        "tool": "chattr",
+        "command": "chmod 000 <FILE> && chattr +i <FILE>",
+        "desc": "Set suspicious webshell permissions to 0 and lock it to prevent web server from reading or executing it."
+    },
+    {
+        "os": "Windows",
+        "category": "File Quarantine",
+        "scenario": "Deny Access to Malicious File",
+        "tool": "icacls",
+        "command": "icacls <FILE_PATH> /deny Everyone:(F)",
+        "desc": "Modify ACL to explicitly deny anyone access to the file."
+    },
+    {
+        "os": "Linux",
+        "category": "General Ops",
+        "scenario": "Stop Docker Container",
+        "tool": "docker",
+        "command": "docker stop <CONTAINER_ID>",
+        "desc": "Fetched dynamically from cheat.sh"
+    },
+    {
+        "os": "Linux",
+        "category": "General Ops",
+        "scenario": "Stop System Service",
+        "tool": "systemctl",
+        "command": "systemctl stop <SERVICE_NAME>",
+        "desc": "Fetched dynamically from cheat.sh"
+    },
+    {
+        "os": "Linux",
+        "category": "General Ops",
+        "scenario": "Package Files for Forensics",
+        "tool": "tar",
+        "command": "tar -czvf archive.tar.gz /path/to/directory",
+        "desc": "Fetched dynamically from cheat.sh"
+    }
+]

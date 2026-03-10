@@ -70,9 +70,10 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1):
     logger.info(f"Get alerts response from Agent: {agent_id} successfully")
     return response.json()
 
+
 def agent_archives(agent_id, keyword="", x_limit=5, payload=None):
     logger.info("Getting archives information")
-    
+
     url = f"https://{host}:9200/wazuh-archives-*/_search"
     headers = {"Content-Type": "application/json"}
 
@@ -84,20 +85,12 @@ def agent_archives(agent_id, keyword="", x_limit=5, payload=None):
         if keyword and (keyword != ""):
             # 自动添加通配符以支持模糊匹配
             # 注意：如果使用通配符，不要在 query string 外面加双引号，否则会被视为短语匹配，通配符将失效
-            if not keyword.startswith('*'):
-                search_query = f'*{keyword}*'
-                must_conditions.append({
-                    "query_string": {
-                        "query": f"{search_query}" # 去掉双引号
-                    }
-                })
+            if not keyword.startswith("*"):
+                search_query = f"*{keyword}*"
+                must_conditions.append({"query_string": {"query": f"{search_query}"}})  # 去掉双引号
             else:
                 # 如果用户自己带了通配符，直接使用
-                must_conditions.append({
-                    "query_string": {
-                        "query": f"{keyword}"
-                    }
-                })
+                must_conditions.append({"query_string": {"query": f"{keyword}"}})
 
         # 3. 构建完整的 DSL Payload
         payload = {
@@ -113,9 +106,10 @@ def agent_archives(agent_id, keyword="", x_limit=5, payload=None):
         data=json.dumps(payload),
         verify=False,
     )
-    
+
     logger.info(f"Get archives  rom Agent: {agent_id} successfully")
     return response.json()
+
 
 if __name__ == "__main__":
     # 测试 count_agent_alerts

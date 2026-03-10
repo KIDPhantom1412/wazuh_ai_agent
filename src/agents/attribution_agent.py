@@ -38,14 +38,14 @@ You have two primary capabilities:
      - The clue is a keyword (e.g., "mimikatz", "error") rather than a specific PID.
      - You need to find the initial event log to extract a PID for further analysis.
      - You need to cross-reference logs to confirm details not present in the process tree.
-   - **CRITICAL RESTRICTION**: 
-      Once you have successfully used `get_process_tree` to reconstruct the execution lineage and identified the malicious commands (e.g., `simulate_attack.py`, `/tmp/system_health.py`), you are **STRICTLY FORBIDDEN** from using `get_agent_archives` to search for these exact file names or paths again just to "confirm" or "find more info" about their execution. 
-      
-      The `get_process_tree` output ALREADY contains all necessary execution data. 
+   - **CRITICAL RESTRICTION**:
+      Once you have successfully used `get_process_tree` to reconstruct the execution lineage and identified the malicious commands (e.g., `simulate_attack.py`, `/tmp/system_health.py`), you are **STRICTLY FORBIDDEN** from using `get_agent_archives` to search for these exact file names or paths again just to "confirm" or "find more info" about their execution.
+
+      The `get_process_tree` output ALREADY contains all necessary execution data.
       **ONLY** use `get_agent_archives` post-tree-generation if you are specifically looking for NON-PROCESS telemetry (like a specific network connection, a DNS request, or a specific IDS alert ID). If you are just trying to find out what a script did, rely SOLELY on the process tree.
 
 **CORE INVESTIGATION PRINCIPLE: FOCUS ON THE CURRENT ATTACK**
-- **Strict Causal Scope**: Your investigation MUST be strictly scoped to events directly causally related to the specific clue. 
+- **Strict Causal Scope**: Your investigation MUST be strictly scoped to events directly causally related to the specific clue.
 - **The Sibling Rule & Graph Pruning**: When a parent process (especially long-lived hosts like `explorer.exe` or `svchost.exe`) has multiple child branches, you must filter them to prevent graph explosion:
   - **EXCLUDE Irrelevant Noise**: Do NOT report on parallel branches, previous sessions, or benign child processes spawned hours apart that are outside the current attack chain.
   - **INCLUDE Malicious Siblings**: ONLY pursue multiple child branches if they contain suspicious activities spawned *at roughly the same time* as part of the coordinated attack (e.g., a script concurrently dropping a payload and initiating a network connection).
@@ -144,7 +144,7 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     win_conditions = [
         {"terms": {"data.win.system.eventID": ["1"]}},
     ]
-    if '-' in str(pid) and len(str(pid)) > 10:
+    if "-" in str(pid) and len(str(pid)) > 10:
         win_conditions.append({"term": {"data.win.eventdata.processGuid": str(pid)}})
     else:
         win_conditions.append({"term": {"data.win.eventdata.processId": str(pid)}})
@@ -155,28 +155,26 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     linux_conditions = [
         {"exists": {"field": "data.audit.pid"}},
         {"term": {"data.audit.pid": str(pid)}},
-        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}} # 增加类型过滤，提高准确性
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤，提高准确性
     ]
 
     # 组合 Windows 或 Linux 条件
-    must_conditions.append({
-        "bool": {
-            "should": [
-                {"bool": {"must": win_conditions}},
-                {"bool": {"must": linux_conditions}}
-            ],
-            "minimum_should_match": 1
+    must_conditions.append(
+        {
+            "bool": {
+                "should": [
+                    {"bool": {"must": win_conditions}},
+                    {"bool": {"must": linux_conditions}},
+                ],
+                "minimum_should_match": 1,
+            }
         }
-    })
+    )
 
     payload = {
         "size": 1,
-        "query": {
-            "bool": {
-                "must": must_conditions
-            }
-        },
-        "sort": [{"timestamp": {"order": "desc"}}]  # 找离当前时间最近的一次创建
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "desc"}}],  # 找离当前时间最近的一次创建
     }
 
     try:
@@ -200,7 +198,7 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     win_conditions = [
         {"terms": {"data.win.system.eventID": ["1"]}},
     ]
-    if '-' in str(ppid) and len(str(ppid)) > 10:
+    if "-" in str(ppid) and len(str(ppid)) > 10:
         win_conditions.append({"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}})
     else:
         win_conditions.append({"term": {"data.win.eventdata.parentProcessId": str(ppid)}})
@@ -210,19 +208,21 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     linux_conditions = [
         {"exists": {"field": "data.audit.ppid"}},
         {"term": {"data.audit.ppid": str(ppid)}},
-        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}} # 增加类型过滤
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤
     ]
 
     # 组合 Windows 或 Linux 条件
-    must_conditions.append({
-        "bool": {
-            "should": [
-                {"bool": {"must": win_conditions}},
-                {"bool": {"must": linux_conditions}}
-            ],
-            "minimum_should_match": 1
+    must_conditions.append(
+        {
+            "bool": {
+                "should": [
+                    {"bool": {"must": win_conditions}},
+                    {"bool": {"must": linux_conditions}},
+                ],
+                "minimum_should_match": 1,
+            }
         }
-    })
+    )
 
     # 时间范围限制：子进程的创建时间必须晚于父进程
     if timestamp_start:
@@ -230,12 +230,8 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
 
     payload = {
         "size": 50,
-        "query": {
-            "bool": {
-                "must": must_conditions
-            }
-        },
-        "sort": [{"timestamp": {"order": "asc"}}] 
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "asc"}}],
     }
 
     try:
@@ -256,12 +252,16 @@ def build_process_node(event):
         data = win_data
         return {
             "pid": data.get("processGuid") if data.get("processGuid") else data.get("processId"),
-            "ppid": data.get("parentProcessGuid") if data.get("parentProcessGuid") else data.get("parentProcessId"),
-            "process_id": data.get("processId"), # 保留原始 PID 用于显示
+            "ppid": (
+                data.get("parentProcessGuid")
+                if data.get("parentProcessGuid")
+                else data.get("parentProcessId")
+            ),
+            "process_id": data.get("processId"),  # 保留原始 PID 用于显示
             "image": data.get("image"),
             "cmd": data.get("commandLine"),
             "timestamp": event.get("timestamp"),
-            "children": []  # 用于存放子节点
+            "children": [],  # 用于存放子节点
         }
     # 解析 Linux Auditd 数据
     elif audit_data:
@@ -282,7 +282,7 @@ def build_process_node(event):
             cmd = " ".join(args)
         else:
             cmd = audit_data.get("command") or "N/A"
-        
+
         return {
             "pid": audit_data.get("pid"),
             "ppid": audit_data.get("ppid"),
@@ -290,7 +290,7 @@ def build_process_node(event):
             "image": image,
             "cmd": cmd,
             "timestamp": event.get("timestamp"),
-            "children": []
+            "children": [],
         }
     return {}
 
@@ -308,7 +308,9 @@ def get_process_descendants(agent_id, ppid, timestamp_start, depth=3):
     for event in children_events:
         node = build_process_node(event)
         # 递归查找该子进程的子进程
-        node["children"] = get_process_descendants(agent_id, node["pid"], node["timestamp"], depth - 1)
+        node["children"] = get_process_descendants(
+            agent_id, node["pid"], node["timestamp"], depth - 1
+        )
         children_nodes.append(node)
 
     return children_nodes
@@ -324,7 +326,7 @@ def build_process_tree(agent_id, pid, ancestor_depth=5, descendant_depth=3, init
     """
     # 1. 向上回溯：找到包括自己在内的祖先链
     ancestor_chain = []
-    current_pid = pid # 这里的 pid 实际上是 ProcessGuid (Windows) 或 PID (Linux)
+    current_pid = pid  # 这里的 pid 实际上是 ProcessGuid (Windows) 或 PID (Linux)
     current_timestamp = None
 
     # 获取当前进程的创建事件
@@ -358,27 +360,31 @@ def build_process_tree(agent_id, pid, ancestor_depth=5, descendant_depth=3, init
         # 如果找不到自己的创建记录，但我们知道这个 PID 存在，
         # 我们就尽力而为，创建一个虚拟节点作为“根”
         # 这样即使没有祖先，也可以作为树的起点来展示它的子孙
-        print(f"Warning: Could not find creation event for initial PID {pid}. Treating it as root/unknown origin.")
-        
+        print(
+            f"Warning: Could not find creation event for initial PID {pid}. Treating it as root/unknown origin."
+        )
+
         # 尝试使用传入的 initial_info 填充信息
         info = initial_info or {}
-        
+
         # 创建一个占位节点，尽量填入已知信息
         target_node = {
             "pid": pid,
             "ppid": None,
             "image": info.get("image", "Unknown/Root"),
             "cmd": info.get("cmd", "N/A"),
-            "timestamp": info.get("timestamp"), # 如果有时间戳，可以帮助后续过滤
+            "timestamp": info.get("timestamp"),  # 如果有时间戳，可以帮助后续过滤
             "children": [],
-            "is_target": True
+            "is_target": True,
         }
         ancestor_chain.append(target_node)
 
     # 2. 仅对目标进程（ancestor_chain[-1]）向下递归查找子孙
     # 之前是把整棵树都展开了，现在我们回退到只展开 target 的子树
     if target_node:
-        target_node["children"] = get_process_descendants(agent_id, target_node["pid"], target_node["timestamp"], descendant_depth)
+        target_node["children"] = get_process_descendants(
+            agent_id, target_node["pid"], target_node["timestamp"], descendant_depth
+        )
 
     # 返回祖先链，其中最后一个元素（target_node）挂载了子树
     return ancestor_chain
@@ -400,10 +406,13 @@ def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
 
     return json.dumps(alerts, ensure_ascii=False)
 
+
 @tool
-def get_process_tree(agent_id: str, pid: str, image: str = "Unknown", cmd: str = "N/A", timestamp: str = None):
+def get_process_tree(
+    agent_id: str, pid: str, image: str = "Unknown", cmd: str = "N/A", timestamp: str = None
+):
     """
-    Reconstruct the process execution tree based on ProcessGuid (Windows preferred), PID (Linux/Windows fallback). 
+    Reconstruct the process execution tree based on ProcessGuid (Windows preferred), PID (Linux/Windows fallback).
     Used to trace who launched a process and get the full parent process chain.
     :param agent_id: Agent ID (e.g., "005")
     :param pid: ProcessGuid (e.g., "{70e31e6c-29a2-69ae-9102-000000000800}") or Process PID (e.g., "1234")
@@ -411,16 +420,14 @@ def get_process_tree(agent_id: str, pid: str, image: str = "Unknown", cmd: str =
     :param cmd: (Optional) Command line arguments
     :param timestamp: (Optional) Log timestamp
     """
-    initial_info = {
-        "image": image,
-        "cmd": cmd,
-        "timestamp": timestamp
-    }
-    
+    initial_info = {"image": image, "cmd": cmd, "timestamp": timestamp}
+
     tree = build_process_tree(agent_id, pid, initial_info=initial_info)
-    
+
     if not tree:
-        return "Could not find process tree for this PID. Please ensure agent_id and pid are correct."
+        return (
+            "Could not find process tree for this PID. Please ensure agent_id and pid are correct."
+        )
     return json.dumps(tree, ensure_ascii=False, indent=2)
 
 
@@ -452,7 +459,10 @@ if __name__ == "__main__":
     #     {"role": "user", "content": "请帮我查找 agent 005 最近一条包含 '93.184.216.34' 的日志，并对该日志进行攻击溯源。"}
     # ]
     messages = [
-        {"role": "user", "content": "请帮我查找 agent 004 最近一条包含 'update_service.sh' 的日志，并对该日志进行攻击溯源。"}
+        {
+            "role": "user",
+            "content": "请帮我查找 agent 004 最近一条包含 'update_service.sh' 的日志，并对该日志进行攻击溯源。",
+        }
     ]
     # 使用 stream 模式以观察中间步骤
     for chunk in indexer_agent.stream({"messages": messages}, stream_mode="values"):
