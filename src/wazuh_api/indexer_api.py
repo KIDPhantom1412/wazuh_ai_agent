@@ -2,6 +2,7 @@ import json
 import logging
 
 import requests
+import urllib3
 from requests.auth import HTTPBasicAuth
 
 from core.config import settings
@@ -13,6 +14,8 @@ host = settings.WAZUH_SERVER_API_HOST
 port = settings.WAZUH_INDEXER_PORT
 username = settings.WAZUH_INDEXER_USER
 password = settings.WAZUH_INDEXER_PASSWORD
+
+urllib3.disable_warnings()
 
 
 def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
@@ -71,7 +74,7 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1):
     return response.json()
 
 
-def agent_archives(agent_id, keyword="", x_limit=5, payload=None):
+def agent_archives(agent_id, keyword="", x_limit=10, payload=None):
     logger.info("Getting archives information")
 
     url = f"https://{host}:9200/wazuh-archives-*/_search"

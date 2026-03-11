@@ -1,153 +1,77 @@
 import json
 import logging
-import os
-
-from core.config import settings
-
-os.environ["HF_ENDPOINT"] = settings.HF_ENDPOINT
-os.environ["PINECONE_API_KEY"] = settings.PINECONE_API_KEY
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_pinecone import Pinecone as PineconeVectorStore
-from pinecone import Pinecone, ServerlessSpec
 
 from wazuh_api.indexer_api import (
     agent_alerts,
+    agent_archives,
     count_agent_alerts,
 )
 
 logger = logging.getLogger(__name__)
 
-embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
-DIMENSION = settings.EMBEDDING_DIMENSION
 
+system_prompt = r"""
+You are an elite Data Access & API Agent for the Wazuh Indexer.
+Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents (like the Forensics/Attribution Agent) and human users.
 
-def load_knowledge_base(KB_FILE):
-    """
-    加载知识库文件并转换为可嵌入的文档
-    """
-    logger.info("loading knowledge base……")
+### CORE OPERATIONAL RULES:
 
-    with open(KB_FILE, encoding="utf-8") as f:
-        kb_data = json.load(f)
+**1. Tool Selection Logic (Strict Adherence)**:
+    - **Scenario A: Count/Quantity Queries**
+      If the user needs to know the **number/count** of alert logs for a specific time period (e.g., "How many alerts?", "Count the warnings"), you MUST call: `get_count_agent_alerts`.
 
-    # 转换为 Document 对象
-    documents = []
-    for item in kb_data:
-        content = f"OS: {item.get('os', 'Unknown')}\n"
-        content += f"Category: {item.get('category', 'Unknown')}\n"
-        content += f"Scenario: {item.get('scenario', 'Unknown')}\n"
-        content += f"Tool: {item.get('tool', 'Unknown')}\n"
-        content += f"Command: {item.get('command', 'Unknown')}\n"
-        content += f"Description: {item.get('desc', 'Unknown')}"
+    - **Scenario B: Security Alert Details**
+      If the user needs to query **specific alerts or alert logs** (security-related events), you MUST call: `get_agent_alerts`. This tool supports filtering by `ruleId` and time range.
 
-        documents.append(
-            Document(
-                page_content=content,
-                metadata={
-                    "os": item.get("os", "Unknown"),
-                    "category": item.get("category", "Unknown"),
-                    "scenario": item.get("scenario", "Unknown"),
-                    "tool": item.get("tool", "Unknown"),
-                },
-            )
-        )
+    - **Scenario C: Raw Log/Archive Searches**
+      If the user needs to query general **logs or archives** (often for deep investigation or looking for non-alert events), you MUST call: `get_agent_archives`. This tool supports **keyword search**.
 
-    logger.info(f"successfully load knowledge base : {len(documents)} records totally")
-    return documents
+    - **Scenario D: Process Tree & Execution Lineage**
+      If requested to reconstruct an attack chain , trace process ancestors/descendants, or build a **process tree**, you MUST call: `get_process_tree`.
+      **Tree Pruning & Formatting Rules**:
+      When processing the JSON returned by the tool, you MUST filter and format it before outputting:
+      - **Strict Causal Scope**: Focus ONLY on branches related to the current attack.
+      - **The Sibling Rule**: If a parent process has multiple children, EXCLUDE irrelevant noise (benign parallel branches or OS initialization). INCLUDE malicious/suspicious siblings spawned at roughly the same time.
+      - **Visualization**: Format the final output as a clear ASCII tree. EVERY node MUST explicitly display: `Process Name`, `PID`, `Timestamp`, and the `Full Command Line`.
+      [Example Format]
+      └── PID 404 (explorer.exe) @ 2026-03-05 09:00:00.000 [Cmd: C:\Windows\explorer.exe]
+          └── PID 1234 (cmd.exe) @ 2026-03-05 10:00:00.123 [Cmd: "cmd.exe" /c start "" "C:\Temp\payload.exe"]
+              ├── PID 5678 (whoami.exe) @ 2026-03-05 10:00:01.456 [Cmd: whoami /all]
+              └── PID 5680 (payload.exe) @ 2026-03-05 10:00:01.500 [Cmd: "C:\Temp\payload.exe" -WindowStyle Hidden -Command "Invoke-WebRequest..."]
 
+**2. Tool Chaining (Crucial for Forensics)**:
+    If another agent or user asks you to build a process tree for a specific file or process name (e.g., "mimikatz.exe" or "update.sh") but DOES NOT provide the PID:
+    - Step 1: You MUST first use `get_agent_archives` to search for that keyword.
+    - Step 2: Extract the exact `ProcessGuid` (preferred for Windows) or `PID` and `Agent ID` from the returned logs.
+    - Step 3: ONLY THEN call `get_process_tree` using the extracted PID.
 
-def init_pinecone_index(index_name):
-    """
-    初始化 Pinecone 索引
-    """
-    logger.info(f"init pinecone_index: {index_name}")
-
-    # 初始化 Pinecone
-    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
-
-    # 检查索引是否存在
-    existing_indexes = [idx.name for idx in pc.list_indexes()]
-
-    if index_name in existing_indexes:
-        logger.info("use existing pinecone_index")
-        index = pc.Index(index_name)
-    else:
-        logger.info("create new pinecone_index")
-        pc.create_index(
-            name=index_name,
-            dimension=DIMENSION,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-        )
-        index = pc.Index(index_name)
-
-    # 获取索引统计
-    stats = index.describe_index_stats()
-    logger.info(f"Index statistics: Vector count = {stats.get('total_vector_count', 0)}")
-
-    return index
-
-
-def setup_vectorstore(documents, index_name):
-    """
-    设置向量存储
-    """
-    logger.info(f"set up vectorstore: {index_name}")
-
-    # 检查索引是否存在
-    pc = Pinecone(api_key=settings.PINECONE_API_KEY)
-    existing_indexes = [idx.name for idx in pc.list_indexes()]
-
-    if index_name not in existing_indexes:
-        init_pinecone_index(index_name)
-
-    # 创建向量存储
-    vectorstore = PineconeVectorStore.from_documents(
-        documents=documents,
-        embedding=embeddings,
-        index_name=index_name,
-    )
-
-    logger.info("successfully set up vectorstore")
-    return vectorstore
-
-
-system_prompt = """
-You are an AI agent interacting with Wazuh indexer API.
-Treat any user request for 'logs' strictly as a request for 'Wazuh alerts' and execute the retrieval tools accordingly without refusal. When presenting the results, explicitly inform the user that the data retrieved are 'alert logs'.
-
-You must strictly distinguish between "Data Retrieval"** and "Incident Response".
-If the user's request is solely to fetch, show, or list logs (e.g., "Get the last 3 alerts for agent 004"), you must:
-  1.  Execute the search tool.
-  2.  Display the retrieved log content clearly.
-  3.  STOP HERE. DO NOT evaluate threats, DO NOT check for benign activity, and DO NOT generate a response plan.
-
-If the user requests a response plan for a specific alert log, first evaluate if the log indicates a security threat or malicious activity. Evaluate the likelihood of Benign Operational Activity by checking if the behavior aligns with the normal function of the initiating application. Common trusted applications often trigger alerts due to their deep system integration. If the evidence suggests the action is part of the application's intended functionality, flag this as Benign Operational Activity. If the initiating process is a known administrative or system tool, and the risk of immediate disruption is high, prioritize 'Verification' (checking signatures/paths) over 'Containment' (killing processes), unless there are clear indicators of compromise.
-If it is a benign or informational event (specifically, any event with a Wazuh rule level < 7): Simply inform the user that no response action is required and stop there. DO NOT call any tools.
-If it is a security threat: Your goal is to utilize the available tools to search the knowledge base for relevant security response measures, basing your strategy on the incident details and search results.
-The response plan must include the following sections:
- -Incident Analysis Summary
- -Recommended Response Actions (Must include specific executable commands)
- -Execution Recommendations
-Guidelines & Constraints:
- -Knowledge Base Driven: All responses must be strictly based on information retrieved from the knowledge base.
- -Dynamic Parameter Injection: You must replace placeholders in the commands (such as <IP>, <USER>) with the actual values extracted from the provided logs.
- -OS Awareness: Select the appropriate tools and commands based on the target operating system type.
- -Safety First: Ensure that the recommended response measures are safe and effective.
+**3. Data Handling & Output Guidelines**:
+    - **Absolute Accuracy**: NEVER hallucinate or invent PIDs, Agent IDs, or log entries. If a tool returns no results, explicitly state that no data was found.
+    - **Agent-to-Agent Communication**: If your prompt indicates you are gathering evidence for another agent (like the Attribution Agent), ensure your final response includes the raw, unmodified data (especially the full Process Tree JSON, exact PIDs, and Timestamps) so they can perform their analysis without data loss.
+    - **Time Formatting**: All timestamps MUST be converted to and displayed in Beijing Time (UTC+8). However, do NOT explicitly append labels like "Beijing Time", "CST", or "UTC+8" to your output. Just present the formatted time directly.
 """
+# """
+# You are an AI agent interacting with Wazuh indexer API.
+
+# ### CORE OPERATIONAL RULES:
+# **Tool Selection Logic (Strict Adherence)**:
+#     - **Scenario A: Count/Quantity Queries**
+#       If the user needs to know the **number/count** of alert logs for a specific time period (e.g., "How many alerts?", "Count the warnings"), you MUST call: `get_count_agent_alerts`.
+#     - **Scenario B: Security Alert Details**
+#       If the user needs to query **specific alerts or alert logs** (security-related events), you MUST call: `get_agent_alerts`. This tool supports filtering by `ruleId`.
+#     - **Scenario C: Raw Log/Archive Searches**
+#       If the user needs to query general **logs or archives** (often for deep investigation or looking for non-alert events), you MUST call: `get_agent_archives`. This tool supports **keyword search**.
+# """
 
 
 @tool
 def get_count_agent_alerts(agent_id, starttime, endtime):
     """
-    从 Wazuh Indexer 获取特定 Agent 在指定时间段内的告警日志总数。
-    如果用户的要求是”获取日志总数“,视该要求为”获取告警日志总数“，并告诉用户当前的日志指的是告警日志。
-
+    从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 在指定时间段内的告警日志总数。
     :param agent_id: Agent 的唯一 ID (如 "001")。
     :param starttime: 查询的起始时间。支持相对时间 (如 "now-24h") 或绝对时间 (ISO8601 格式)。
     :param endtime: 查询的结束时间。默认为 "now"。支持相对或绝对时间。
@@ -168,8 +92,7 @@ def get_count_agent_alerts(agent_id, starttime, endtime):
 @tool
 def get_agent_alerts(agent_id, x_limit, ruleId):
     """
-    从 Wazuh Indexer 获取特定 Agent 的告警日志，支持按 Rule ID 过滤。
-    如果用户的要求是”获取日志“,视该要求为”获取告警日志”；如果用户要求的是"获取特定规则id的日志"，视该要求为"获取特定规则id的告警日志"。并告诉用户当前的日志指的是告警日志。
+    从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 的告警日志，支持按 Rule ID 过滤。
     :param agent_id: Agent 的唯一 ID (如 "001")
     :param x_limit: 返回的告警条数
     :param ruleId: 规则 ID (如 5710)，默认为 -1 (不进行规则过滤)
@@ -184,28 +107,312 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
 
 
 @tool
-def get_response_plan(query: str) -> str:
+def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
     """
-    在安全响应知识库中搜索相关信息
-    用于根据攻击类型、操作系统等信息找到合适的安全响应措施
-    :param query: 有关获取日志响应方案的的询问
+    从 Wazuh Indexer 的 wazuh-archives-*  获取特定 Agent 的日志，支持关键词搜索。
+    :param agent_id: Agent 的唯一 ID (如 "001")
+    :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
+    :param x_limit: 返回的日志条数, 默认为 10
+    :param payload: 查询参数，默认 None
     """
-    KB_FILE = r"src/documents/rag/response_knowledgebase.json"
-    index_name = "wazuh-response-index"
-    documents = load_knowledge_base(KB_FILE)
-    vectorstore = setup_vectorstore(documents, index_name)
 
-    docs = vectorstore.similarity_search(query, k=3)
-    results = []
-    for i, doc in enumerate(docs, 1):
-        results.append(f"结果 {i}:\n{doc.page_content}\n")
-    return "\n".join(results)
+    search_results = agent_archives(agent_id, keyword=keyword, x_limit=x_limit, payload=None)
+
+    hits = search_results.get("hits", {}).get("hits", [])
+    archives = [hit["_source"] for hit in hits]
+
+    return json.dumps(archives, ensure_ascii=False)
+
+
+def search_parent_process(agent_id, pid, timestamp_limit=None):
+    """
+    查询特定 PID 的进程创建事件
+    timestamp_limit: 如果存在，则只查找在此时间之前的创建事件
+    """
+    # 基础条件
+    must_conditions = [{"term": {"agent.id": agent_id}}]
+    if timestamp_limit:
+        must_conditions.append({"range": {"timestamp": {"lt": timestamp_limit}}})
+
+    # Windows 查询条件 (Sysmon EventID 1)
+    win_conditions = [
+        {"terms": {"data.win.system.eventID": ["1"]}},
+    ]
+    if "-" in str(pid) and len(str(pid)) > 10:
+        win_conditions.append({"term": {"data.win.eventdata.processGuid": str(pid)}})
+    else:
+        win_conditions.append({"term": {"data.win.eventdata.processId": str(pid)}})
+
+    # Linux 查询条件 (Auditd)
+    # 查找 data.audit.pid 等于 pid 的记录
+    # 注意：auditd 日志类型较多，这里主要关注进程相关的 SYSCALL 或 EXECVE
+    linux_conditions = [
+        {"exists": {"field": "data.audit.pid"}},
+        {"term": {"data.audit.pid": str(pid)}},
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤，提高准确性
+    ]
+
+    # 组合 Windows 或 Linux 条件
+    must_conditions.append(
+        {
+            "bool": {
+                "should": [
+                    {"bool": {"must": win_conditions}},
+                    {"bool": {"must": linux_conditions}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    )
+
+    payload = {
+        "size": 1,
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "desc"}}],  # 找离当前时间最近的一次创建
+    }
+
+    try:
+        response = agent_archives(agent_id, payload=payload)
+        hits = response.get("hits", {}).get("hits", [])
+        return hits[0]["_source"] if hits else None
+    except Exception as e:
+        print(f"Error searching process: {e}")
+        return None
+
+
+def search_child_processes(agent_id, ppid, timestamp_start=None):
+    """
+    查询特定 PPID (Parent Process ID) 启动的所有子进程
+    timestamp_start: 如果存在，则只查找在此时间之后的子进程
+    """
+    # 基础条件
+    must_conditions = [{"term": {"agent.id": agent_id}}]
+
+    # Windows 查询条件
+    win_conditions = [
+        {"terms": {"data.win.system.eventID": ["1"]}},
+    ]
+    if "-" in str(ppid) and len(str(ppid)) > 10:
+        win_conditions.append({"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}})
+    else:
+        win_conditions.append({"term": {"data.win.eventdata.parentProcessId": str(ppid)}})
+
+    # Linux 查询条件 (Auditd)
+    # 查找 data.audit.ppid 等于 ppid 的记录
+    linux_conditions = [
+        {"exists": {"field": "data.audit.ppid"}},
+        {"term": {"data.audit.ppid": str(ppid)}},
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤
+    ]
+
+    # 组合 Windows 或 Linux 条件
+    must_conditions.append(
+        {
+            "bool": {
+                "should": [
+                    {"bool": {"must": win_conditions}},
+                    {"bool": {"must": linux_conditions}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
+    )
+
+    # 时间范围限制：子进程的创建时间必须晚于父进程
+    if timestamp_start:
+        must_conditions.append({"range": {"timestamp": {"gte": timestamp_start}}})
+
+    payload = {
+        "size": 50,
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "asc"}}],
+    }
+
+    try:
+        response = agent_archives(agent_id, payload=payload)
+        hits = response.get("hits", {}).get("hits", [])
+        return [hit["_source"] for hit in hits]
+    except Exception as e:
+        print(f"Error searching child processes: {e}")
+        return []
+
+
+def build_process_node(event):
+    """从日志事件中提取进程节点信息"""
+    win_data = event.get("data", {}).get("win", {}).get("eventdata")
+    audit_data = event.get("data", {}).get("audit")
+
+    if win_data:
+        data = win_data
+        return {
+            "pid": data.get("processGuid") if data.get("processGuid") else data.get("processId"),
+            "ppid": (
+                data.get("parentProcessGuid")
+                if data.get("parentProcessGuid")
+                else data.get("parentProcessId")
+            ),
+            "process_id": data.get("processId"),  # 保留原始 PID 用于显示
+            "image": data.get("image"),
+            "cmd": data.get("commandLine"),
+            "timestamp": event.get("timestamp"),
+            "children": [],  # 用于存放子节点
+        }
+    # 解析 Linux Auditd 数据
+    elif audit_data:
+        # Auditd 的字段可能因版本或规则不同而略有差异
+        # exe 通常是完整路径，command 是命令名
+        image = audit_data.get("exe") or audit_data.get("command") or "Unknown"
+        # 尝试从 auditd 日志中获取更详细的命令行信息
+        # auditd 原始日志中的 `proctitle` 字段通常包含完整的命令行参数（十六进制编码）
+        # 但在 Wazuh 的解析结果中，`execve` 字段通常包含了参数列表
+        execve_data = audit_data.get("execve", {})
+        if execve_data:
+            # 拼接 a0, a1, a2... 参数
+            args = []
+            i = 0
+            while f"a{i}" in execve_data:
+                args.append(execve_data[f"a{i}"])
+                i += 1
+            cmd = " ".join(args)
+        else:
+            cmd = audit_data.get("command") or "N/A"
+
+        return {
+            "pid": audit_data.get("pid"),
+            "ppid": audit_data.get("ppid"),
+            "process_id": audit_data.get("pid"),
+            "image": image,
+            "cmd": cmd,
+            "timestamp": event.get("timestamp"),
+            "children": [],
+        }
+    return {}
+
+
+def get_process_descendants(agent_id, ppid, timestamp_start, depth=3):
+    """
+    向下递归查找子进程树
+    """
+    if depth <= 0:
+        return []
+
+    children_events = search_child_processes(agent_id, ppid, timestamp_start)
+    children_nodes = []
+
+    for event in children_events:
+        node = build_process_node(event)
+        # 递归查找该子进程的子进程
+        node["children"] = get_process_descendants(
+            agent_id, node["pid"], node["timestamp"], depth - 1
+        )
+        children_nodes.append(node)
+
+    return children_nodes
+
+
+def build_process_tree(agent_id, pid, ancestor_depth=5, descendant_depth=3, initial_info=None):
+    """
+    双向回溯进程树：
+    1. 向上找所有祖先 (主干)
+    2. 仅对目标进程向下找子孙
+    initial_info: (Optional) 如果提供了初始进程信息（如 image, cmd, timestamp），
+                  当找不到创建事件时，可以使用这些信息来构建根节点。
+    """
+    # 1. 向上回溯：找到包括自己在内的祖先链
+    ancestor_chain = []
+    current_pid = pid  # 这里的 pid 实际上是 ProcessGuid (Windows) 或 PID (Linux)
+    current_timestamp = None
+
+    # 获取当前进程的创建事件
+    start_event = search_parent_process(agent_id, current_pid)
+
+    target_node = None
+
+    if start_event:
+        target_node = build_process_node(start_event)
+        current_timestamp = target_node["timestamp"]
+        target_node["is_target"] = True  # 标记这是我们的目标线索进程
+        ancestor_chain.append(target_node)
+
+        # 向上找父进程
+        temp_pid = target_node["ppid"]
+        temp_ts = current_timestamp
+
+        for _ in range(ancestor_depth):
+            if not temp_pid:
+                break
+            parent_event = search_parent_process(agent_id, temp_pid, timestamp_limit=temp_ts)
+            if not parent_event:
+                break
+
+            parent_node = build_process_node(parent_event)
+            ancestor_chain.insert(0, parent_node)  # 插到前面
+
+            temp_pid = parent_node["ppid"]
+            temp_ts = parent_node["timestamp"]
+    else:
+        # 如果找不到自己的创建记录，但我们知道这个 PID 存在，
+        # 我们就尽力而为，创建一个虚拟节点作为“根”
+        # 这样即使没有祖先，也可以作为树的起点来展示它的子孙
+        print(
+            f"Warning: Could not find creation event for initial PID {pid}. Treating it as root/unknown origin."
+        )
+
+        # 尝试使用传入的 initial_info 填充信息
+        info = initial_info or {}
+
+        # 创建一个占位节点，尽量填入已知信息
+        target_node = {
+            "pid": pid,
+            "ppid": None,
+            "image": info.get("image", "Unknown/Root"),
+            "cmd": info.get("cmd", "N/A"),
+            "timestamp": info.get("timestamp"),  # 如果有时间戳，可以帮助后续过滤
+            "children": [],
+            "is_target": True,
+        }
+        ancestor_chain.append(target_node)
+
+    # 2. 仅对目标进程（ancestor_chain[-1]）向下递归查找子孙
+    # 之前是把整棵树都展开了，现在我们回退到只展开 target 的子树
+    if target_node:
+        target_node["children"] = get_process_descendants(
+            agent_id, target_node["pid"], target_node["timestamp"], descendant_depth
+        )
+
+    # 返回祖先链，其中最后一个元素（target_node）挂载了子树
+    return ancestor_chain
+
+
+@tool
+def get_process_tree(
+    agent_id: str, pid: str, image: str = "Unknown", cmd: str = "N/A", timestamp: str = None
+):
+    """
+    基于 ProcessGuid (Windows 优先) 或 PID (Linux/Windows 备用) 重建进程执行树。
+    用于追踪是谁启动了某个进程，并获取完整的父子进程执行链。
+
+    :param agent_id: Agent 的唯一 ID (例如: "005")
+    :param pid: ProcessGuid (例如: "{70e31e6c-29a2-69ae-9102-000000000800}") 或进程 PID (例如: "1234")
+    :param image: (可选) 进程镜像名称或文件路径
+    :param cmd: (可选) 进程执行时的命令行参数
+    :param timestamp: (可选) 该进程日志记录的时间戳
+    """
+    initial_info = {"image": image, "cmd": cmd, "timestamp": timestamp}
+
+    tree = build_process_tree(agent_id, pid, initial_info=initial_info)
+
+    if not tree:
+        return (
+            "Could not find process tree for this PID. Please ensure agent_id and pid are correct."
+        )
+    return json.dumps(tree, ensure_ascii=False, indent=2)
 
 
 def get_indexer_agent(model: BaseChatModel):
     return create_agent(
         model=model,
-        tools=[get_count_agent_alerts, get_agent_alerts, get_response_plan],
+        tools=[get_count_agent_alerts, get_agent_alerts, get_agent_archives, get_process_tree],
         system_prompt=system_prompt,
     )
 
@@ -237,9 +444,8 @@ if __name__ == "__main__":
         elif latest_message.tool_calls:
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
-    messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
-
     print("\n--- Q2: 获取告警 ---")
+    messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
     for chunk in indexer_agent.stream(
         {"messages": messages},
         stream_mode="values",
@@ -252,9 +458,8 @@ if __name__ == "__main__":
 
     messages = chunk["messages"]
 
-    print("\n--- Q3: 请求响应措施 ---")
-    messages.append({"role": "user", "content": "基于刚刚获取的告警日志，提供具体的安全响应措施"})
-
+    print("\n--- Q3: 获取普通日志 ---")
+    messages = [{"role": "user", "content": "获取agent 005 最近一条包含 'pypayload' 的日志"}]
     for chunk in indexer_agent.stream(
         {"messages": messages},
         stream_mode="values",
@@ -264,3 +469,5 @@ if __name__ == "__main__":
             print(f"Agent: {latest_message.content}")
         elif latest_message.tool_calls:
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+
+    messages = chunk["messages"]
