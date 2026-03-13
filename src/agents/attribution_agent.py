@@ -45,6 +45,7 @@ Visualize the attack chain using the strict format defined above. Ensure strict 
   - **Exclude Unrelated Siblings**: If a parent process has multiple child branches, DO NOT include them in the visualization. Only show the branch relevant to the current alert or timeline.
   - **Show Only Latest Attack**: If multiple attacks or executions are found (e.g., recurring scheduled tasks), ONLY visualize the single most recent execution chain relevant to the user's query. Do NOT show historical duplicates.
   - **Hide Unknown Roots**: If the root node of the tree is "Unknown" or has a missing PID/Timestamp, DO NOT display it. Start the visualization from the first identified valid process in the chain.
+  - **Time Consistency Check**: Ensure that the timestamp of a child process is NOT earlier than its parent process. If you find such a case (e.g., Parent @ 18:55, Child @ 18:16), it indicates a logical error or PID reuse. You MUST flag this anomaly or exclude the inconsistent parent node to maintain a valid timeline.
 
 Example format:
 ```
@@ -118,7 +119,8 @@ if __name__ == "__main__":
     messages = [
         {
             "role": "user",
-            "content": "请帮我查找 agent 005 最近一条包含 'pypayload' 的日志，并对该日志进行攻击溯源，并生成调查报告。",
+            # "content": "请帮我查找 agent 005 最近一条包含 'pypayload' 的日志，并对该日志进行攻击溯源，并生成调查报告。",
+            "content": "我在agent 005发现一个可疑进程，进程ID为12784，帮我对其进行攻击溯源",
         }
     ]
     # messages = [

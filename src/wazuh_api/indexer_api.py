@@ -84,16 +84,34 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None):
         # 1. 初始化基础查询：必须匹配特定的 Agent ID
         must_conditions = [{"term": {"agent.id": agent_id}}]
 
-        # 追加关键词搜索功能
+        # 2. 追加关键词搜索功能
         if keyword and (keyword != ""):
-            # 自动添加通配符以支持模糊匹配
-            # 注意：如果使用通配符，不要在 query string 外面加双引号，否则会被视为短语匹配，通配符将失效
-            if not keyword.startswith("*"):
-                search_query = f"*{keyword}*"
-                must_conditions.append({"query_string": {"query": f"{search_query}"}})  # 去掉双引号
+            # 去除用户可能自己多加的前后空格
+            clean_keyword = keyword.strip()
+
+            if " " in clean_keyword:
+                # 场景 A: 关键词包含空格
+                # 必须使用短语匹配，强制加上转义的双引号，且绝对不加通配符 *
+                # 如果用户已经自己加了引号，先去掉再包，防止嵌套错误
+                clean_keyword = clean_keyword.strip('"').strip("'")
+                must_conditions.append({"query_string": {"query": f'"{clean_keyword}"'}})
             else:
-                # 如果用户自己带了通配符，直接使用
-                must_conditions.append({"query_string": {"query": f"{keyword}"}})
+                # 场景 B: 关键词是不带空格的单字
+                # 可以安全地使用通配符模糊匹配
+                if not clean_keyword.startswith("*"):
+                    must_conditions.append({"query_string": {"query": f"*{clean_keyword}*"}})
+                else:
+                    must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
+
+        # if keyword and (keyword != ""):
+        #     # 自动添加通配符以支持模糊匹配
+        #     # 注意：如果使用通配符，不要在 query string 外面加双引号，否则会被视为短语匹配，通配符将失效
+        #     if not keyword.startswith("*"):
+        #         search_query = f"*{keyword}*"
+        #         must_conditions.append({"query_string": {"query": f"{search_query}"}})  # 去掉双引号
+        #     else:
+        #         # 如果用户自己带了通配符，直接使用
+        #         must_conditions.append({"query_string": {"query": f"{keyword}"}})
 
         # 3. 构建完整的 DSL Payload
         payload = {
@@ -132,7 +150,8 @@ if __name__ == "__main__":
         print(f"描述: {alert.get('rule', {}).get('description')}")
 
     # 测试 agent_archives
-    search_keyword = "whoami"
+    # search_keyword = "whoami"
+    search_keyword = "wevtutil cl System"
     search_response = agent_archives("005", keyword=search_keyword, x_limit=1)
     hits = search_response.get("hits", {}).get("hits", [])
     archives = [hit["_source"] for hit in hits]

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 system_prompt = r"""
 You are an elite Data Access & API Agent for the Wazuh Indexer.
-Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents (like the Forensics/Attribution Agent) and human users.
+Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents and human users.
 
 ### CORE OPERATIONAL RULES:
 
@@ -53,19 +53,23 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
     - **Absolute Accuracy**: NEVER hallucinate or invent PIDs, Agent IDs, or log entries. If a tool returns no results, explicitly state that no data was found.
     - **Agent-to-Agent Communication**: If your prompt indicates you are gathering evidence for another agent (like the Attribution Agent), ensure your final response includes the raw, unmodified data (especially the full Process Tree JSON, exact PIDs, and Timestamps) so they can perform their analysis without data loss.
     - **Time Formatting**: All timestamps MUST be converted to and displayed in Beijing Time (UTC+8). However, do NOT explicitly append labels like "Beijing Time", "CST", or "UTC+8" to your output. Just present the formatted time directly.
-"""
-# """
-# You are an AI agent interacting with Wazuh indexer API.
 
-# ### CORE OPERATIONAL RULES:
-# **Tool Selection Logic (Strict Adherence)**:
-#     - **Scenario A: Count/Quantity Queries**
-#       If the user needs to know the **number/count** of alert logs for a specific time period (e.g., "How many alerts?", "Count the warnings"), you MUST call: `get_count_agent_alerts`.
-#     - **Scenario B: Security Alert Details**
-#       If the user needs to query **specific alerts or alert logs** (security-related events), you MUST call: `get_agent_alerts`. This tool supports filtering by `ruleId`.
-#     - **Scenario C: Raw Log/Archive Searches**
-#       If the user needs to query general **logs or archives** (often for deep investigation or looking for non-alert events), you MUST call: `get_agent_archives`. This tool supports **keyword search**.
-# """
+### ROLE BOUNDARIES & RESTRICTIONS (CRITICAL):
+You are strictly a data retrieval and process tree visualization engine. You MUST respect the following boundaries:
+
+1. **NO ATTACK ATTRIBUTION OR REPORTING**:
+   - You ARE authorized to call tools to construct and output ASCII process trees.
+   - **CRITICAL**: You MUST NOT write any analysis sections like "Attack Source Analysis", "Key Findings", "Attack Chain Evolution", or "Incident Summary".
+   - **CRITICAL**: DO NOT explain what the process tree means. DO NOT describe the attack flow in text.
+   - JUST OUTPUT THE ASCII TREE AND THE RAW LOG DETAILS. NOTHING ELSE.
+
+2. **NO RESPONSE STRATEGIES**: ...
+
+3. **OUTPUT FORMAT**:
+   - Only return the tool outputs (e.g., the JSON or the ASCII tree string).
+   - If you must speak, keep it extremely brief, e.g., "Here is the process tree data for Agent 005."
+   - DO NOT SUMMARIZE the findings. Leave the summarization and attribution to other agent.
+"""
 
 
 @tool
@@ -145,7 +149,6 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
 
     # Linux 查询条件 (Auditd)
     # 查找 data.audit.pid 等于 pid 的记录
-    # 注意：auditd 日志类型较多，这里主要关注进程相关的 SYSCALL 或 EXECVE
     linux_conditions = [
         {"exists": {"field": "data.audit.pid"}},
         {"term": {"data.audit.pid": str(pid)}},
@@ -263,8 +266,6 @@ def build_process_node(event):
         # exe 通常是完整路径，command 是命令名
         image = audit_data.get("exe") or audit_data.get("command") or "Unknown"
         # 尝试从 auditd 日志中获取更详细的命令行信息
-        # auditd 原始日志中的 `proctitle` 字段通常包含完整的命令行参数（十六进制编码）
-        # 但在 Wazuh 的解析结果中，`execve` 字段通常包含了参数列表
         execve_data = audit_data.get("execve", {})
         if execve_data:
             # 拼接 a0, a1, a2... 参数
@@ -351,9 +352,6 @@ def build_process_tree(agent_id, pid, ancestor_depth=5, descendant_depth=3, init
             temp_pid = parent_node["ppid"]
             temp_ts = parent_node["timestamp"]
     else:
-        # 如果找不到自己的创建记录，但我们知道这个 PID 存在，
-        # 我们就尽力而为，创建一个虚拟节点作为“根”
-        # 这样即使没有祖先，也可以作为树的起点来展示它的子孙
         print(
             f"Warning: Could not find creation event for initial PID {pid}. Treating it as root/unknown origin."
         )

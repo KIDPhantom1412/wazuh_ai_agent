@@ -4,8 +4,7 @@
     "demo_agent": "./src/agents/agent.py:demo_agent",
     "indexer_agent": "./src/agents/agent.py:indexer_agent",
     "response_agent": "./src/agents/agent.py:response_agent",
-    "attribution_agent": "./src/agents/agent.py:attribution_agent",
-    "supervisor_agent": "./src/agents/agent.py:supervisor_agent"
+    "attribution_agent": "./src/agents/agent.py:attribution_agent"
   },
   "env": ".env"
 }
