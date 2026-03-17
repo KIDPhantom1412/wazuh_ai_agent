@@ -30,45 +30,36 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
     - **Scenario C: Raw Log/Archive Searches**
       If the user needs to query general **logs or archives** (often for deep investigation or looking for non-alert events), you MUST call: `get_agent_archives`. This tool supports **keyword search**.
 
-    - **Scenario D: Process Tree & Execution Lineage**
-      If requested to reconstruct an attack chain , trace process ancestors/descendants, or build a **process tree**, you MUST call: `get_process_tree`.
-      **Tree Pruning & Formatting Rules**:
-      When processing the JSON returned by the tool, you MUST filter and format it before outputting:
-      - **Strict Causal Scope**: Focus ONLY on branches related to the current attack.
-      - **The Sibling Rule**: If a parent process has multiple children, EXCLUDE irrelevant noise (benign parallel branches or OS initialization). INCLUDE malicious/suspicious siblings spawned at roughly the same time.
-      - **Visualization**: Format the final output as a clear ASCII tree. EVERY node MUST explicitly display: `Process Name`, `PID`, `Timestamp`, and the `Full Command Line`.
-      [Example Format]
-      └── PID 404 (explorer.exe) @ 2026-03-05 09:00:00.000 [Cmd: C:\Windows\explorer.exe]
-          └── PID 1234 (cmd.exe) @ 2026-03-05 10:00:00.123 [Cmd: "cmd.exe" /c start "" "C:\Temp\payload.exe"]
-              ├── PID 5678 (whoami.exe) @ 2026-03-05 10:00:01.456 [Cmd: whoami /all]
-              └── PID 5680 (payload.exe) @ 2026-03-05 10:00:01.500 [Cmd: "C:\Temp\payload.exe" -WindowStyle Hidden -Command "Invoke-WebRequest..."]
+    - **Scenario D: Parent Process & Execution Origin**
+      If the user specifically needs to search for the **creator/parent** of a single process, or asks questions like "Who created PID X?", "Find the execution details/command line of PID X", you MUST call: `get_parent_process_log`. This is for targeted, single-step upward queries.
+
+    - **Scenario E: Child Processes & Spawned Activity**
+      If the user asks for the **child processes** or processes spawned by a specific parent PID (e.g., "What processes were spawned by PID X?", "Find child process logs of PID X"), you MUST call: `get_child_processes_logs`. This is for fetching immediate descendants.
 
 **2. Tool Chaining (Crucial for Forensics)**:
-    If another agent or user asks you to build a process tree for a specific file or process name (e.g., "mimikatz.exe" or "update.sh") but DOES NOT provide the PID:
+    If another agent or user asks you to investigate a specific file or process name (e.g., "mimikatz.exe" or "update.sh") but DOES NOT provide the PID:
     - Step 1: You MUST first use `get_agent_archives` to search for that keyword.
     - Step 2: Extract the exact `ProcessGuid` (preferred for Windows) or `PID` and `Agent ID` from the returned logs.
-    - Step 3: ONLY THEN call `get_process_tree` using the extracted PID.
+    - Step 3: ONLY THEN call `get_parent_process_log` or `get_child_processes_logs` using the extracted PID to find its origin or impact.
 
 **3. Data Handling & Output Guidelines**:
     - **Absolute Accuracy**: NEVER hallucinate or invent PIDs, Agent IDs, or log entries. If a tool returns no results, explicitly state that no data was found.
-    - **Agent-to-Agent Communication**: If your prompt indicates you are gathering evidence for another agent (like the Attribution Agent), ensure your final response includes the raw, unmodified data (especially the full Process Tree JSON, exact PIDs, and Timestamps) so they can perform their analysis without data loss.
-    - **Time Formatting**: All timestamps MUST be converted to and displayed in Beijing Time (UTC+8). However, do NOT explicitly append labels like "Beijing Time", "CST", or "UTC+8" to your output. Just present the formatted time directly.
+    - **Agent-to-Agent Communication**: If your prompt indicates you are gathering evidence for another agent (like the Attribution Agent), ensure your final response includes the raw, unmodified data (especially the exact PIDs, command lines, and Timestamps) so they can perform their analysis without data loss.
 
 ### ROLE BOUNDARIES & RESTRICTIONS (CRITICAL):
-You are strictly a data retrieval and process tree visualization engine. You MUST respect the following boundaries:
+You are strictly a data retrieval engine. You MUST respect the following boundaries:
 
 1. **NO ATTACK ATTRIBUTION OR REPORTING**:
-   - You ARE authorized to call tools to construct and output ASCII process trees.
    - **CRITICAL**: You MUST NOT write any analysis sections like "Attack Source Analysis", "Key Findings", "Attack Chain Evolution", or "Incident Summary".
-   - **CRITICAL**: DO NOT explain what the process tree means. DO NOT describe the attack flow in text.
-   - JUST OUTPUT THE ASCII TREE AND THE RAW LOG DETAILS. NOTHING ELSE.
+   - **CRITICAL**: DO NOT explain what the logs mean. DO NOT describe the attack flow in text.
+   - JUST OUTPUT THE RETRIEVED LOG DETAILS (JSON). NOTHING ELSE.
 
-2. **NO RESPONSE STRATEGIES**: ...
+2. **NO RESPONSE STRATEGIES**: Do not suggest remediation steps.
 
 3. **OUTPUT FORMAT**:
-   - Only return the tool outputs (e.g., the JSON or the ASCII tree string).
-   - If you must speak, keep it extremely brief, e.g., "Here is the process tree data for Agent 005."
-   - DO NOT SUMMARIZE the findings. Leave the summarization and attribution to other agent.
+   - Only return the tool outputs (e.g., the JSON data).
+   - If you must speak, keep it extremely brief, e.g., "Here is the execution data for PID 1234 on Agent 005."
+   - DO NOT SUMMARIZE the findings. Leave the summarization, attribution, and visualization to the other agent.
 """
 
 
@@ -117,7 +108,6 @@ def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
     :param agent_id: Agent 的唯一 ID (如 "001")
     :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
     :param x_limit: 返回的日志条数, 默认为 10
-    :param payload: 查询参数，默认 None
     """
 
     search_results = agent_archives(agent_id, keyword=keyword, x_limit=x_limit, payload=None)
@@ -125,7 +115,152 @@ def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
     hits = search_results.get("hits", {}).get("hits", [])
     archives = [hit["_source"] for hit in hits]
 
+    # 日志简化
+    archives = [simplify_log(hit["_source"]) for hit in hits]
+
     return json.dumps(archives, ensure_ascii=False)
+
+
+def simplify_log(source):
+    """
+    用于提取单条日志关键内容，并保持字段路径与原始日志一致。
+    仅针对 Windows EventChannel (win) 与 OTRF (ids) 类型进行简化。
+    """
+    if not isinstance(source, dict):
+        return source
+
+    data = source.get("data", {})
+    if not isinstance(data, dict):
+        return source
+
+    ids = data.get("ids", {})
+    win = data.get("win", {})
+
+    # 暂时只处理 ids 和 win 类型的日志；其他类型的日志直接返回
+    if not (isinstance(ids, dict) and ids) and not (isinstance(win, dict) and win):
+        return source
+
+    # 该函数用于递归地简化嵌套的字典或列表，移除空值、空字典、空列表
+    def _prune(obj):
+        if isinstance(obj, dict):
+            cleaned = {}
+            for k, v in obj.items():
+                pv = _prune(v)
+                if pv is None or pv == "":
+                    continue
+                if isinstance(pv, dict) and not pv:
+                    continue
+                if isinstance(pv, list) and not pv:
+                    continue
+                cleaned[k] = pv
+            return cleaned
+        if isinstance(obj, list):
+            cleaned_list = []
+            for v in obj:
+                pv = _prune(v)
+                if pv is None or pv == "":
+                    continue
+                if isinstance(pv, dict) and not pv:
+                    continue
+                cleaned_list.append(pv)
+            return cleaned_list
+        return obj
+
+    out = {}
+
+    # 下面是字段提取逻辑
+
+    for ts_key in ("@timestamp", "timestamp"):
+        if source.get(ts_key):
+            out[ts_key] = source.get(ts_key)
+
+    agent = source.get("agent", {})
+    if isinstance(agent, dict) and agent.get("id"):
+        out["agent"] = {"id": agent.get("id")}
+
+    rule = source.get("rule", {})
+    if isinstance(rule, dict) and rule:
+        rule_out = {}
+        for k in ("id", "level", "description"):
+            if rule.get(k) is not None and rule.get(k) != "":
+                rule_out[k] = rule.get(k)
+        mitre = rule.get("mitre", {})
+        if isinstance(mitre, dict) and mitre:
+            mitre_out = {}
+            if mitre.get("id"):
+                mitre_out["id"] = mitre.get("id")
+            if mitre.get("tactic"):
+                mitre_out["tactic"] = mitre.get("tactic")
+            if mitre_out:
+                rule_out["mitre"] = mitre_out
+        if rule_out:
+            out["rule"] = rule_out
+
+    # ids场景
+    if isinstance(ids, dict) and ids:
+        ids_keep = [
+            "UtcTime",
+            "EventID",
+            "ProcessId",
+            "ProcessGuid",
+            "ProviderGuid",
+            "ParentProcessId",
+            "ParentProcessGuid",
+            "port",
+            "Image",
+            "CommandLine",
+            "ParentImage",
+            "ParentCommandLine",
+            "TargetObject",
+            "User",
+            "IntegrityLevel",
+            "@timestamp",
+        ]
+        ids_out = {k: ids.get(k) for k in ids_keep if ids.get(k) is not None and ids.get(k) != ""}
+        if ids_out:
+            out["data"] = {"ids": ids_out}
+
+    # win场景
+    elif isinstance(win, dict) and win:
+        win_eventdata = (
+            win.get("eventdata", {}) if isinstance(win.get("eventdata", {}), dict) else {}
+        )
+        win_system = win.get("system", {}) if isinstance(win.get("system", {}), dict) else {}
+
+        system_out = {}
+        if win_system.get("eventID") is not None and win_system.get("eventID") != "":
+            system_out["eventID"] = win_system.get("eventID")
+
+        eventdata_keep = [
+            "utcTime",
+            "processId",
+            "processGuid",
+            "parentProcessId",
+            "parentProcessGuid",
+            "image",
+            "commandLine",
+            "parentImage",
+            "parentCommandLine",
+            "targetFilename",
+            "targetObject",
+            "user",
+            "integrityLevel",
+        ]
+        eventdata_out = {
+            k: win_eventdata.get(k)
+            for k in eventdata_keep
+            if win_eventdata.get(k) is not None and win_eventdata.get(k) != ""
+        }
+
+        win_out = {}
+        if system_out:
+            win_out["system"] = system_out
+        if eventdata_out:
+            win_out["eventdata"] = eventdata_out
+        if win_out:
+            out["data"] = {"win": win_out}
+
+    return _prune(out)
 
 
 def search_parent_process(agent_id, pid, timestamp_limit=None):
@@ -138,14 +273,42 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     if timestamp_limit:
         must_conditions.append({"range": {"timestamp": {"lt": timestamp_limit}}})
 
-    # Windows 查询条件 (Sysmon EventID 1)
+    # Windows 查询条件 (Sysmon EventID 1 或 IDS EventID 1)
     win_conditions = [
-        {"terms": {"data.win.system.eventID": ["1"]}},
+        {
+            "bool": {
+                "should": [
+                    {"terms": {"data.win.system.eventID": ["1"]}},
+                    {"terms": {"data.ids.EventID": ["1"]}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
     ]
     if "-" in str(pid) and len(str(pid)) > 10:
-        win_conditions.append({"term": {"data.win.eventdata.processGuid": str(pid)}})
+        win_conditions.append(
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"data.win.eventdata.processGuid": str(pid)}},
+                        {"term": {"data.ids.ProcessGuid": str(pid)}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     else:
-        win_conditions.append({"term": {"data.win.eventdata.processId": str(pid)}})
+        win_conditions.append(
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"data.win.eventdata.processId": str(pid)}},
+                        {"term": {"data.ids.ProcessId": str(pid)}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
 
     # Linux 查询条件 (Auditd)
     # 查找 data.audit.pid 等于 pid 的记录
@@ -177,7 +340,8 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
-        return hits[0]["_source"] if hits else None
+        # return hits[0]["_source"] if hits else None
+        return simplify_log(hits[0]["_source"]) if hits else None
     except Exception as e:
         print(f"Error searching process: {e}")
         return None
@@ -191,14 +355,42 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     # 基础条件
     must_conditions = [{"term": {"agent.id": agent_id}}]
 
-    # Windows 查询条件
+    # Windows 查询条件 (Sysmon EventID 1 或 IDS EventID 1)
     win_conditions = [
-        {"terms": {"data.win.system.eventID": ["1"]}},
+        {
+            "bool": {
+                "should": [
+                    {"terms": {"data.win.system.eventID": ["1"]}},
+                    {"terms": {"data.ids.EventID": ["1"]}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
     ]
     if "-" in str(ppid) and len(str(ppid)) > 10:
-        win_conditions.append({"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}})
+        win_conditions.append(
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}},
+                        {"term": {"data.ids.ParentProcessGuid": str(ppid)}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     else:
-        win_conditions.append({"term": {"data.win.eventdata.parentProcessId": str(ppid)}})
+        win_conditions.append(
+            {
+                "bool": {
+                    "should": [
+                        {"term": {"data.win.eventdata.parentProcessId": str(ppid)}},
+                        {"term": {"data.ids.ParentProcessId": str(ppid)}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
 
     # Linux 查询条件 (Auditd)
     # 查找 data.audit.ppid 等于 ppid 的记录
@@ -234,7 +426,8 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
-        return [hit["_source"] for hit in hits]
+        # return [hit["_source"] for hit in hits]
+        return [simplify_log(hit["_source"]) for hit in hits]
     except Exception as e:
         print(f"Error searching child processes: {e}")
         return []
@@ -242,10 +435,24 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
 
 def build_process_node(event):
     """从日志事件中提取进程节点信息"""
-    win_data = event.get("data", {}).get("win", {}).get("eventdata")
-    audit_data = event.get("data", {}).get("audit")
+    data_root = event.get("data", {})
+    win_data = data_root.get("win", {}).get("eventdata")
+    ids_data = data_root.get("ids")
+    audit_data = data_root.get("audit")
 
-    if win_data:
+    if ids_data:
+        # 优先解析新的 ids 格式
+        return {
+            "pid": ids_data.get("ProcessGuid") or ids_data.get("ProcessId"),
+            "ppid": ids_data.get("ParentProcessGuid") or ids_data.get("ParentProcessId"),
+            "process_id": ids_data.get("ProcessId"),
+            "image": ids_data.get("Image"),
+            "cmd": ids_data.get("CommandLine"),
+            "timestamp": ids_data.get("@timestamp") or event.get("timestamp"),
+            "port": ids_data.get("port"),
+            "children": [],
+        }
+    elif win_data:
         data = win_data
         return {
             "pid": data.get("processGuid") if data.get("processGuid") else data.get("processId"),
@@ -254,18 +461,16 @@ def build_process_node(event):
                 if data.get("parentProcessGuid")
                 else data.get("parentProcessId")
             ),
-            "process_id": data.get("processId"),  # 保留原始 PID 用于显示
+            "process_id": data.get("processId"),
             "image": data.get("image"),
             "cmd": data.get("commandLine"),
             "timestamp": event.get("timestamp"),
-            "children": [],  # 用于存放子节点
+            "children": [],
         }
     # 解析 Linux Auditd 数据
     elif audit_data:
-        # Auditd 的字段可能因版本或规则不同而略有差异
-        # exe 通常是完整路径，command 是命令名
         image = audit_data.get("exe") or audit_data.get("command") or "Unknown"
-        # 尝试从 auditd 日志中获取更详细的命令行信息
+        # 尝试从 auditd 日志中拼接详细的命令行信息
         execve_data = audit_data.get("execve", {})
         if execve_data:
             # 拼接 a0, a1, a2... 参数
@@ -407,10 +612,57 @@ def get_process_tree(
     return json.dumps(tree, ensure_ascii=False, indent=2)
 
 
+@tool
+def get_parent_process_log(agent_id: str, pid: str, timestamp_limit: str = None):
+    """
+    基于 ProcessGuid (Windows 优先) 或 PID (Linux/Windows 备用) 查询给定进程的事件创建日志。
+
+    :param agent_id: Agent 的唯一 ID (例如: "005")
+    :param pid: 进程的 PID(例如: "1234") 或 ProcessGuid(例如: "{70e31e6c-29a2-69ae-9102-000000000800}")
+    :param timestamp_limit: (可选) 如果提供，则只查找在此时间之前的创建事件。支持 ISO8601 格式。
+    """
+    result = search_parent_process(agent_id, pid, timestamp_limit)
+
+    if result:
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    else:
+        return json.dumps(
+            {"error": f"Could not find a process creation event for PID {pid} on Agent {agent_id}."}
+        )
+
+
+@tool
+def get_child_processes_logs(agent_id: str, pid: str, timestamp_start: str = None):
+    """
+    基于 ProcessGuid (Windows 优先) 或 PID (Linux/Windows 备用) 查询给定进程直接派生（创建）的所有子进程日志。
+    不进行递归，只获取直属的子进程创建事件。
+
+    :param agent_id: Agent 的唯一 ID (例如: "005")
+    :param pid: 父进程的 PID(例如: "1234") 或 ProcessGuid(例如: "{70e31e6c...}")
+    :param timestamp_start: (可选) 如果提供，则只查找在此时间之后的子进程创建事件。支持 ISO8601 格式。
+    """
+    results = search_child_processes(agent_id, pid, timestamp_start)
+
+    if results:
+        return json.dumps(results, ensure_ascii=False, indent=2)
+    else:
+        return json.dumps(
+            {
+                "error": f"Could not find any child processes spawned by parent PID {pid} on Agent {agent_id}."
+            }
+        )
+
+
 def get_indexer_agent(model: BaseChatModel):
     return create_agent(
         model=model,
-        tools=[get_count_agent_alerts, get_agent_alerts, get_agent_archives, get_process_tree],
+        tools=[
+            get_count_agent_alerts,
+            get_agent_alerts,
+            get_agent_archives,
+            get_parent_process_log,
+            get_child_processes_logs,
+        ],
         system_prompt=system_prompt,
     )
 
@@ -427,23 +679,51 @@ if __name__ == "__main__":
     )
     indexer_agent = get_indexer_agent(model)
 
-    print("\n--- Q1: 获取告警数量 ---")
-    for chunk in indexer_agent.stream(
-        {
-            "messages": [
-                {"role": "user", "content": "过去12小时内agent id为001的agent产生多少警告?"}
-            ]
-        },
-        stream_mode="values",
-    ):
-        latest_message = chunk["messages"][-1]
-        if latest_message.content:
-            print(f"Agent: {latest_message.content}")
-        elif latest_message.tool_calls:
-            print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+    # print("\n--- Q1: 获取告警数量 ---")
+    # for chunk in indexer_agent.stream(
+    #     {
+    #         "messages": [
+    #             {"role": "user", "content": "过去12小时内agent id为001的agent产生多少警告?"}
+    #         ]
+    #     },
+    #     stream_mode="values",
+    # ):
+    #     latest_message = chunk["messages"][-1]
+    #     if latest_message.content:
+    #         print(f"Agent: {latest_message.content}")
+    #     elif latest_message.tool_calls:
+    #         print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
-    print("\n--- Q2: 获取告警 ---")
-    messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
+    # print("\n--- Q2: 获取告警 ---")
+    # messages = [{"role": "user", "content": "agent id为004的agent最近3条规则ID为5764的告警?"}]
+    # for chunk in indexer_agent.stream(
+    #     {"messages": messages},
+    #     stream_mode="values",
+    # ):
+    #     latest_message = chunk["messages"][-1]
+    #     if latest_message.content:
+    #         print(f"Agent: {latest_message.content}")
+    #     elif latest_message.tool_calls:
+    #         print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+
+    # messages = chunk["messages"]
+
+    # print("\n--- Q3: 获取普通日志 ---")
+    # messages = [{"role": "user", "content": "获取agent 005 最近一条包含 'pypayload' 的日志"}]
+    # for chunk in indexer_agent.stream(
+    #     {"messages": messages},
+    #     stream_mode="values",
+    # ):
+    #     latest_message = chunk["messages"][-1]
+    #     if latest_message.content:
+    #         print(f"Agent: {latest_message.content}")
+    #     elif latest_message.tool_calls:
+    #         print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
+
+    # messages = chunk["messages"]
+
+    print("\n--- Q4: 获取父进程 ---")
+    messages = [{"role": "user", "content": "获取agent 005 进程为8912的创建日志"}]
     for chunk in indexer_agent.stream(
         {"messages": messages},
         stream_mode="values",
@@ -456,8 +736,8 @@ if __name__ == "__main__":
 
     messages = chunk["messages"]
 
-    print("\n--- Q3: 获取普通日志 ---")
-    messages = [{"role": "user", "content": "获取agent 005 最近一条包含 'pypayload' 的日志"}]
+    print("\n--- Q5 获取子进程 ---")
+    messages = [{"role": "user", "content": "获取agent 005 进程为8912的子进程的进程id"}]
     for chunk in indexer_agent.stream(
         {"messages": messages},
         stream_mode="values",
