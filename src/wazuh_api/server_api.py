@@ -120,3 +120,92 @@ if __name__ == "__main__":
     print(get_agents_overview())
 
     print(get_config_agentless())
+
+
+def upload_rule_file(filename: str, content: str, overwrite: bool = False):
+    """Upload a rule file to the Wazuh manager."""
+    logger.info(f"Uploading rule file: {filename}")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.put(
+        f"{protocol}://{host}:{port}/rules/files/{filename}?overwrite={str(overwrite).lower()}",
+        headers=requests_headers,
+        data=content,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info(f"Upload rule file {filename} successfully")
+    else:
+        logger.error(f"Failed to upload rule file {filename}: {response.text}")
+    return response.json()
+
+
+def delete_rule_file(filename: str):
+    """Delete a rule file from the Wazuh manager."""
+    logger.info(f"Deleting rule file: {filename}")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.delete(
+        f"{protocol}://{host}:{port}/rules/files/{filename}",
+        headers=requests_headers,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info(f"Delete rule file {filename} successfully")
+    else:
+        logger.error(f"Failed to delete rule file {filename}: {response.text}")
+    return response.json()
+
+
+def restart_manager():
+    """Restart the Wazuh manager."""
+    logger.info("Restarting Wazuh manager")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.put(
+        f"{protocol}://{host}:{port}/manager/restart",
+        headers=requests_headers,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info("Restart Wazuh manager successfully")
+    else:
+        logger.error(f"Failed to restart Wazuh manager: {response.text}")
+    return response.json()
+
+
+def validate_configuration():
+    """Validate the Wazuh manager configuration."""
+    logger.info("Validating Wazuh manager configuration")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.get(
+        f"{protocol}://{host}:{port}/manager/configuration/validation",
+        headers=requests_headers,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info("Validate configuration successfully")
+    else:
+        logger.error(f"Failed to validate configuration: {response.text}")
+    return response.json()
+
+
+def run_logtest(log_event: str, token: str = None, location: str = None):
+    """Run logtest against a log event."""
+    logger.info("Running logtest")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+
+    payload = {"log": log_event}
+    if token:
+        payload["token"] = token
+    if location:
+        payload["location"] = location
+
+    response = requests.put(
+        f"{protocol}://{host}:{port}/logtest",
+        headers=requests_headers,
+        json=payload,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info("Run logtest successfully")
+    else:
+        logger.error(f"Failed to run logtest: {response.text}")
+    return response.json()
