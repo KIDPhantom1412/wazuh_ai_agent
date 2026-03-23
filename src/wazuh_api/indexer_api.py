@@ -42,7 +42,7 @@ def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
     return response.json()
 
 
-def agent_alerts(agent_id, x_limit=5, ruleId=-1):
+def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     logger.info("Getting alerts information")
 
     url = f"{protocol}://{host}:{port}/wazuh-alerts-*/_search"
@@ -62,19 +62,30 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1):
         "sort": [{"timestamp": {"order": "desc"}}],
     }
 
-    response = requests.post(
-        url,
-        auth=HTTPBasicAuth(username, password),
-        headers=headers,
-        data=json.dumps(payload),
-        verify=False,
-    )
+    try:
+        response = requests.post(
+            url,
+            auth=HTTPBasicAuth(username, password),
+            headers=headers,
+            data=json.dumps(payload),
+            verify=False,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.exceptions.Timeout as e:
+        logger.exception(f"Timeout querying alerts for Agent: {agent_id}")
+        raise e
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"Request error querying alerts for Agent: {agent_id}")
+        raise e
+
 
     logger.info(f"Get alerts response from Agent: {agent_id} successfully")
-    return response.json()
+    return result
 
 
-def agent_archives(agent_id, keyword="", x_limit=10, payload=None):
+def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=600):
     logger.info("Getting archives information")
 
     url = f"https://{host}:9200/wazuh-archives-*/_search"
@@ -103,15 +114,6 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None):
                 else:
                     must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
 
-        # if keyword and (keyword != ""):
-        #     # 自动添加通配符以支持模糊匹配
-        #     # 注意：如果使用通配符，不要在 query string 外面加双引号，否则会被视为短语匹配，通配符将失效
-        #     if not keyword.startswith("*"):
-        #         search_query = f"*{keyword}*"
-        #         must_conditions.append({"query_string": {"query": f"{search_query}"}})  # 去掉双引号
-        #     else:
-        #         # 如果用户自己带了通配符，直接使用
-        #         must_conditions.append({"query_string": {"query": f"{keyword}"}})
 
         # 3. 构建完整的 DSL Payload
         payload = {
@@ -120,16 +122,26 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None):
             "sort": [{"timestamp": {"order": "desc"}}],
         }
 
-    response = requests.post(
-        url,
-        auth=HTTPBasicAuth(username, password),
-        headers=headers,
-        data=json.dumps(payload),
-        verify=False,
-    )
+    try:
+        response = requests.post(
+            url,
+            auth=HTTPBasicAuth(username, password),
+            headers=headers,
+            data=json.dumps(payload),
+            verify=False,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.exceptions.Timeout as e:
+        logger.exception(f"Timeout querying archives for Agent: {agent_id}")
+        raise e
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"Request error querying archives for Agent: {agent_id}")
+        raise e
 
-    logger.info(f"Get archives  rom Agent: {agent_id} successfully")
-    return response.json()
+    logger.info(f"Get archives rom Agent: {agent_id} successfully")
+    return result
 
 
 if __name__ == "__main__":
