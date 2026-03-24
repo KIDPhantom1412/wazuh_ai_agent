@@ -1,7 +1,11 @@
 import json
 import logging
+import re
 from typing import Any, Literal
 
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -14,6 +18,7 @@ from wazuh_api.server_api import (
     delete_rule_file,
     get_agents_overview,
     get_config_agentless,
+    get_wazuh_server_api_info,
     restart_manager,
     run_logtest,
     upload_rule_file,
@@ -26,13 +31,24 @@ logger = logging.getLogger(__name__)
 
 
 class RuleRequirements(BaseModel):
-    agent_id: str | None = Field(
-        description="Target agent ID (e.g., '001', 'all'). Optional if scope is clear or agentless."
+    agent_id: str | list[str] | None = Field(
+        default=None,
+        description="Target agent ID(s) (e.g., '001', ['001','004'], or 'all'). Optional if scope is clear or agentless."
     )
-    scope: str = Field(
+    agent_name: str | list[str] | None = Field(
+        default=None, description="Target agent name(s) (maps to fixed field agent.name)."
+    )
+    agent_ip: str | list[str] | None = Field(
+        default=None, description="Target agent IP(s) (maps to fixed field agent.ip)."
+    )
+    scope: str | None = Field(
+        default=None,
         description="Description of the target scope (e.g., 'all agents', 'specific agent 001', 'agentless device 192.168.1.1')."
     )
-    time_range: str = Field(description="Time range (e.g., 'now-24h'). Default 'now-24h'.")
+    time_range: str = Field(
+        default="now-24h",
+        description="Time range for timestamp.gte (e.g., 'now-24h', 'now-3d', 'now-7d' or ISO8601 datetime).",
+    )
     filters: dict[str, Any] = Field(
         description="Other filters like source IP, destination IP, port, protocol, etc."
     )
@@ -75,26 +91,40 @@ def environment_perception_node(state: RuleGeneratorState, config: RunnableConfi
     """Step S1: Environment Perception."""
     logger.info("Executing Environment Perception Node")
 
-    if state.get("environment_info"):
-        return {"environment_info": state["environment_info"]}
+    if state.get("environment_info") and state.get("server_timestamp"):
+        return {
+            "environment_info": state["environment_info"],
+            "server_timestamp": state["server_timestamp"],
+        }
 
     try:
         agents_overview = get_agents_overview()
         agentless_config = get_config_agentless()
+        server_info = get_wazuh_server_api_info()
+        server_timestamp_value = server_info.get("data", {}).get("timestamp", "")
+        server_timestamp = (
+            server_timestamp_value if isinstance(server_timestamp_value, str) else ""
+        )
 
-        env_info = {"agents_overview": agents_overview, "agentless_config": agentless_config}
+        env_info = {
+            "agents_overview": agents_overview,
+            "agentless_config": agentless_config,
+            "server_timestamp": server_timestamp,
+        }
 
         formatted_env_info = json.dumps(env_info, indent=2)
-        return {"environment_info": formatted_env_info}
+        return {"environment_info": formatted_env_info, "server_timestamp": server_timestamp}
     except Exception as e:
         logger.error(f"Error in environment perception: {e}")
-        return {"environment_info": "Error retrieving environment info."}
+        return {
+            "environment_info": "Error retrieving environment info.",
+            "server_timestamp": "",
+        }
 
 
-def decision_node(state: RuleGeneratorState, config: RunnableConfig):
+def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
     """Decide the next step based on user input and state."""
     logger.info("Executing Decision Node")
-    model = config.get("configurable", {}).get("model")
     messages = state["messages"]
     user_input = messages[-1].content if messages else ""
 
@@ -116,10 +146,10 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig):
             (
                 "system",
                 """You are a router. Determine the user's intent based on the current state.
-        
+
         Context: {prompt_context}
         User Input: {user_input}
-        
+
         Options:
         - 'verify_rule': User wants to verify/test the generated rule.
         - 'cancel_verification': User wants to cancel the process before verification.
@@ -127,7 +157,7 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig):
         - 'delete_rule': User wants to delete/revert the applied rule (after verification success).
         - 'extract_requirements': User wants to generate a new rule, change requirements, or start over.
         - 'unknown': Intent is unclear.
-        
+
         {format_instructions}
         """,
             ),
@@ -145,21 +175,20 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig):
             }
         )
         return {"decision": result.next_step}
-    except:
+    except Exception:
         return {"decision": "unknown"}
 
 
-def requirement_understanding_node(state: RuleGeneratorState, config: RunnableConfig):
+def requirement_understanding_node(
+    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
+):
     """Step S2: Requirement Understanding & Scope Definition."""
     logger.info("Executing Requirement Understanding Node")
-
-    model = config.get("configurable", {}).get("model")
-    if not model:
-        raise ValueError("Model not found in config")
 
     messages = state["messages"]
     user_input = messages[-1].content if messages else ""
     env_info = state.get("environment_info", "")
+    server_timestamp = state.get("server_timestamp", "")
 
     existing_reqs = state.get("rule_requirements", {})
 
@@ -169,23 +198,38 @@ def requirement_understanding_node(state: RuleGeneratorState, config: RunnableCo
         [
             (
                 "system",
-                """You are a Wazuh rule generation assistant. 
+                """You are a Wazuh rule generation assistant.
         Your task is to understand the user's rule generation requirement and extract necessary parameters.
-        
+
         Current Environment Information:
         {env_info}
-        
+
+        Current Wazuh server timestamp (for time understanding):
+        {server_timestamp}
+
         Previous Requirements (if any): {existing_reqs}
-        
+
         You need to extract:
         1. Target Scope: This could be specific Agent IDs (e.g., '001'), a group of agents, all agents, or specific agentless devices (IPs).
-        2. Time Range (e.g., 'now-24h'). Default to 'now-24h' if not specified.
-        3. Specific filters (IP, port, protocol, etc.)
+        2. Extract fixed scope fields when user gives them:
+           - agent_id -> maps to fixed field agent.id
+           - agent_name -> maps to fixed field agent.name
+           - agent_ip -> maps to fixed field agent.ip
+           - time_range -> maps to fixed field timestamp range
+           - if user gives multiple targets, use array format for these fields
+           - convert vague time expressions to concrete timestamp.gte expression:
+             * 今天/今日 -> now-1d
+             * 这几天/最近几天 -> now-3d
+             * 最近一周 -> now-7d
+             * 最近一个月 -> now-30d
+           - if user gives explicit date, output ISO8601 datetime
+        3. Specific filters (IP, port, protocol, etc.) not covered by fixed scope fields.
         4. Event Type (e.g., 'ssh_failed', 'file_change')
-        
+
         If critical information is missing (e.g., the scope is completely unknown), list it in 'missing_parameters'.
         Note: 'agent_id' is optional if the scope refers to agentless devices or is otherwise clear without an ID.
-        
+        Ensure 'time_range' is always filled.
+
         {format_instructions}
         """,
             ),
@@ -199,6 +243,7 @@ def requirement_understanding_node(state: RuleGeneratorState, config: RunnableCo
         result = chain.invoke(
             {
                 "env_info": env_info,
+                "server_timestamp": server_timestamp,
                 "existing_reqs": str(existing_reqs),
                 "user_input": user_input,
                 "format_instructions": parser.get_format_instructions(),
@@ -211,53 +256,140 @@ def requirement_understanding_node(state: RuleGeneratorState, config: RunnableCo
         return {"missing_parameters": ["Could not parse requirements. Please clarify."]}
 
 
-def log_retrieval_feasibility_node(state: RuleGeneratorState, config: RunnableConfig):
-    """Step S3: Log Retrieval & Feasibility Judgment."""
+def log_retrieval_feasibility_node(
+    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
+):
     logger.info("Executing Log Retrieval & Feasibility Node")
 
-    model = config.get("configurable", {}).get("model")
     reqs = state.get("rule_requirements", {})
+    time_range = reqs.get("time_range", "now-24h")
+    base_scope_filter: list[dict[str, Any]] = [
+        {"range": {"timestamp": {"gte": time_range, "lte": "now"}}}
+    ]
 
-    query_body = {
-        "query": {
-            "bool": {
-                "must": [],
-                "filter": [
-                    {
-                        "range": {
-                            "timestamp": {"gte": reqs.get("time_range", "now-24h"), "lte": "now"}
-                        }
-                    }
-                ],
-            }
-        },
-        "size": 20,
+    def append_scope_filter(field_name: str, value: Any):
+        if value is None:
+            return
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            if cleaned:
+                base_scope_filter.append({"terms": {field_name: cleaned}})
+            return
+        value_str = str(value).strip()
+        if not value_str:
+            return
+        if "," in value_str:
+            cleaned = [item.strip() for item in value_str.split(",") if item.strip()]
+            if cleaned:
+                base_scope_filter.append({"terms": {field_name: cleaned}})
+            return
+        base_scope_filter.append({"term": {field_name: value_str}})
+
+    append_scope_filter("agent.name", reqs.get("agent_name"))
+    append_scope_filter("agent.ip", reqs.get("agent_ip"))
+    agent_id = reqs.get("agent_id")
+    if not (
+        isinstance(agent_id, str) and agent_id.strip().lower() == "all"
+    ) and not (
+        isinstance(agent_id, list) and any(str(item).strip().lower() == "all" for item in agent_id)
+    ):
+        append_scope_filter("agent.id", agent_id)
+
+    base_scope_query = {
+        "query": {"bool": {"filter": base_scope_filter}},
+        "size": 10,
         "sort": [{"timestamp": {"order": "desc"}}],
     }
 
-    agent_id = reqs.get("agent_id")
-    if agent_id and agent_id.lower() != "all":
-        if "," in agent_id:
-            ids = [aid.strip() for aid in agent_id.split(",")]
-            query_body["query"]["bool"]["filter"].append({"terms": {"agent.id": ids}})
-        else:
-            query_body["query"]["bool"]["filter"].append({"term": {"agent.id": agent_id}})
+    @tool
+    def query_archived_logs(query_body: dict) -> str:
+        """Search archived logs in Wazuh indexer using Elasticsearch query body."""
+        response = search_archived_logs(query_body)
+        return json.dumps(response, ensure_ascii=False)
 
-    filters = reqs.get("filters", {})
-    for k, v in filters.items():
-        if k and v:
-            query_body["query"]["bool"]["must"].append({"match": {k: v}})
+    def extract_json(text: str) -> dict[str, Any]:
+        text = (text or "").strip()
+        if not text:
+            return {}
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.DOTALL)
+        try:
+            return json.loads(text)
+        except Exception:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if not match:
+                return {}
+            try:
+                return json.loads(match.group(0))
+            except Exception:
+                return {}
 
     try:
-        search_result = search_archived_logs(query_body)
-        hits = search_result.get("hits", {}).get("hits", [])
-        logs = [hit["_source"] for hit in hits]
+        retrieval_planner = create_agent(
+            model=model,
+            tools=[query_archived_logs],
+            system_prompt="""You are a Wazuh log retrieval ReAct agent.
+You must first query with the provided base_scope_query.
+Then infer real field names and value formats from returned logs.
+Then query again with a refined query in the same scope.
+Finally output strict JSON only:
+{
+  "attempts": [{"query": {}, "hits": 0}],
+  "logs": [],
+  "log_analysis": "string",
+  "is_feasible": true,
+  "infeasibility_reason": "string"
+}
+Do not output markdown.""",
+        )
+        retrieval_result = retrieval_planner.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "requirement": reqs,
+                                "base_scope_query": base_scope_query,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                ]
+            },
+            {"recursion_limit": 20},
+        )
+
+        result_text = ""
+        if retrieval_result.get("messages"):
+            result_text = retrieval_result["messages"][-1].content or ""
+        result_payload = extract_json(result_text)
+
+        logs = result_payload.get("logs")
+        if not isinstance(logs, list):
+            logs = []
+
+        attempts = result_payload.get("attempts")
+        if not isinstance(attempts, list):
+            attempts = []
+
+        if not logs:
+            scope_response = search_archived_logs(base_scope_query)
+            scope_hits = scope_response.get("hits", {}).get("hits", [])
+            logs = [item.get("_source", {}) for item in scope_hits]
+            attempts.append(
+                {
+                    "query": base_scope_query,
+                    "hits": len(logs),
+                    "mode": "fallback_scope_query",
+                }
+            )
 
         if not logs:
             return {
                 "logs": [],
                 "is_feasible": False,
-                "infeasibility_reason": "No logs found matching the criteria.",
+                "infeasibility_reason": f"No logs found by retrieval agent. Attempts: {json.dumps(attempts, ensure_ascii=False)}",
             }
 
         parser = PydanticOutputParser(pydantic_object=FeasibilityCheck)
@@ -267,24 +399,17 @@ def log_retrieval_feasibility_node(state: RuleGeneratorState, config: RunnableCo
                 (
                     "system",
                     """You are an expert in Wazuh logs. Analyze the following retrieved logs and the user's requirement.
-            Determine if it is feasible to generate a rule.
-            
-            User Requirement: {reqs}
-            
-            Retrieved Logs (First {count}):
-            {logs}
-            
-            Analyze the logs for:
-            1. Field composition
-            2. Common values
-            3. Patterns
-            4. Decoder information
-            
-            If logs contain relevant events matching the requirement, return feasible=True.
-            If no relevant logs are found or data is insufficient, return feasible=False and explain why.
-            
-            {format_instructions}
-            """,
+Determine if it is feasible to generate a rule.
+User Requirement: {reqs}
+Retrieved Logs (First {count}): {logs}
+Analyze the logs for:
+1. Field composition
+2. Common values
+3. Patterns
+4. Decoder information
+If logs contain relevant events matching the requirement, return feasible=True.
+If no relevant logs are found or data is insufficient, return feasible=False and explain why.
+{format_instructions}""",
                 ),
                 ("human", "Analyze feasibility."),
             ]
@@ -301,9 +426,12 @@ def log_retrieval_feasibility_node(state: RuleGeneratorState, config: RunnableCo
             }
         )
 
+        enriched_analysis = (
+            f"{result.log_features}\n\nSearch attempts summary:\n{json.dumps(attempts, ensure_ascii=False)}"
+        )
         return {
             "logs": logs,
-            "log_analysis": result.log_features,
+            "log_analysis": enriched_analysis,
             "is_feasible": result.is_feasible,
             "infeasibility_reason": result.reason,
         }
@@ -311,16 +439,17 @@ def log_retrieval_feasibility_node(state: RuleGeneratorState, config: RunnableCo
     except Exception as e:
         logger.error(f"Error in log retrieval/feasibility: {e}")
         return {
+            "logs": [],
             "is_feasible": False,
-            "infeasibility_reason": f"Error retrieving or analyzing logs: {str(e)}",
+            "infeasibility_reason": f"No logs found due to retrieval error: {str(e)}",
         }
 
 
-def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig):
+def rule_generation_node(
+    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
+):
     """Step S4: Rule Generation."""
     logger.info("Executing Rule Generation Node")
-
-    model = config.get("configurable", {}).get("model")
 
     skills_to_load = [
         "rule",
@@ -347,20 +476,20 @@ def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig):
     parser = PydanticOutputParser(pydantic_object=GeneratedRule)
 
     system_prompt_template = """You are a Wazuh Rule Generator Agent.
-    
+
     Your task is to generate a Wazuh XML rule based on the requirements and log analysis.
-    
+
     Context:
     - Environment: {env_info}
     - Requirements: {reqs}
     - Log Analysis: {log_analysis}
-    
+
     Rule Syntax Knowledge:
     {skill_content}
-    
+
     Previous Validation Errors (if any):
     {validation_error}
-    
+
     Instructions:
     1. Use valid XML format.
     2. Ensure rule ID is unique (use a random ID between 100000-199999 for this temporary rule, or check existing).
@@ -368,7 +497,7 @@ def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig):
     3. Include proper description, level, and match/regex.
     4. Group the rule appropriately.
     5. Ensure XML is properly escaped.
-    
+
     {format_instructions}
     """
 
@@ -472,11 +601,9 @@ def cleanup_rule_node(state: RuleGeneratorState, config: RunnableConfig):
     return {"verification_feedback": "No rule file to clean up."}
 
 
-def response_node(state: RuleGeneratorState, config: RunnableConfig):
+def response_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
     """Generate response to the user."""
     logger.info("Executing Response Node")
-    model = config.get("configurable", {}).get("model")
-
     missing = state.get("missing_parameters")
     generated_rule = state.get("generated_rule")
     is_feasible = state.get("is_feasible")
@@ -508,7 +635,7 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig):
         [
             (
                 "system",
-                "You are a helpful assistant. Generate a response to the user based on the current status.",
+                "You are a helpful assistant. Generate a response to the user based on the current status. Final response must be in Chinese.",
             ),
             ("human", prompt_text),
         ]

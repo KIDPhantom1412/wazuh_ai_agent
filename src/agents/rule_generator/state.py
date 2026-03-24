@@ -7,6 +7,7 @@ from langgraph.graph.message import add_messages
 class RuleGeneratorState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     environment_info: str | None
+    server_timestamp: str | None
     rule_requirements: dict | None
     missing_parameters: list[str] | None
     logs: list[dict] | None

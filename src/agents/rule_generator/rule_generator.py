@@ -1,3 +1,5 @@
+from functools import partial
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
 
@@ -26,13 +28,17 @@ def get_rule_generator_agent(model: BaseChatModel):
 
     # Add nodes
     workflow.add_node("environment_perception", environment_perception_node)
-    workflow.add_node("decision", decision_node)
-    workflow.add_node("requirement_understanding", requirement_understanding_node)
-    workflow.add_node("log_retrieval_feasibility", log_retrieval_feasibility_node)
-    workflow.add_node("rule_generation", rule_generation_node)
+    workflow.add_node("decision", partial(decision_node, model=model))
+    workflow.add_node(
+        "requirement_understanding", partial(requirement_understanding_node, model=model)
+    )
+    workflow.add_node(
+        "log_retrieval_feasibility", partial(log_retrieval_feasibility_node, model=model)
+    )
+    workflow.add_node("rule_generation", partial(rule_generation_node, model=model))
     workflow.add_node("rule_verification", rule_verification_node)
     workflow.add_node("cleanup_rule", cleanup_rule_node)
-    workflow.add_node("response", response_node)
+    workflow.add_node("response", partial(response_node, model=model))
 
     # Add edges
     # Start -> Decision (Router)
