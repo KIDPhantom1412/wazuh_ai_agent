@@ -80,7 +80,6 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
         logger.exception(f"Request error querying alerts for Agent: {agent_id}")
         raise e
 
-
     logger.info(f"Get alerts response from Agent: {agent_id} successfully")
     return result
 
@@ -113,7 +112,6 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=600):
                     must_conditions.append({"query_string": {"query": f"*{clean_keyword}*"}})
                 else:
                     must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
-
 
         # 3. 构建完整的 DSL Payload
         payload = {

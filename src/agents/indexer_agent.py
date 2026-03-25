@@ -2,7 +2,6 @@ import datetime
 import json
 import logging
 import re
-from typing import List
 
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -31,8 +30,8 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
       If the user needs to query **specific alerts or alert logs** (security-related events), you MUST call: `get_agent_alerts`. This tool supports filtering by `ruleId` and time range.
 
     - **Scenario C: Generic Keyword Searches (STRICTLY NON-PROCESS QUERIES)**
-      If the user explicitly asks to search for a general text string, malicious filename, or IP address (e.g., "Search for mimikatz", "Find logs containing 10.10.10.5"), you MUST call: `get_agent_archives`. 
-      **CRITICAL RESTRICTION**: NEVER use this tool when the user is asking about parent processes, child processes, or specific lateral activities.
+      If the user explicitly asks to search for a general text string, malicious filename, or IP address (e.g., "Search for mimikatz", "Find logs containing 10.10.10.5"), you MUST call: `get_agent_archives`.
+      **ABSOLUTE BAN (CRITICAL)**: You are STRICTLY FORBIDDEN from executing `get_agent_archives` if the instruction contains a numerical `PID` , a `ProcessGuid`, or requests a specific `EventID`. If the user asks you to search for a PID or Guid using this function, you MUST REJECT the request and tell them: "Error: Policy prohibits searching PIDs/Guids/EventIDs via keyword archives. Please specify if you need parent, child, or lateral activity logs using the dedicated tools."
 
     - **Scenario D: Parent Process & Execution Origin**
       If the user specifically needs to search for the **creator/parent** of a single process, or asks questions like "Who created PID X?", "Find the execution details of PID X", you MUST call: `get_parent_process_log`.
@@ -49,11 +48,20 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
 
 **3. DATA HANDLING & ROLE BOUNDARIES (CRITICAL)**:
 You are exclusively a raw data retrieval pipeline for the Attribution Agent. You MUST adhere strictly to the following constraints:
-    - **Zero Hallucination**: NEVER invent PIDs, Agent IDs, or log entries. If a tool returns no results, explicitly state that no data was found.
+    - **ZERO HALLUCINATION (ABSOLUTE RULE)**: You are a dumb data pipeline. You MUST NOT generate, simulate, or mock any JSON data. If the tool returns `[]`, `None`, or an error, you MUST EXACTLY output: "No data found for this query." Do not attempt to create an example or guess the log format.
     - **Raw JSON Only**: Output the actual, unmodified JSON data exactly as returned by your tools. This preserves crucial forensic fields (PIDs, command lines, timestamps) preventing data loss for the downstream agent.
     - **No Analysis or Summarization**: DO NOT explain what the logs mean, describe the attack flow, or generate reports (e.g., "Key Findings", "Attack Source"). Leave all attribution and visualization to the other agent.
     - **No Remediation**: Do not suggest response strategies or remediation steps.
-    - **Keep it Brief**: If conversational text is necessary, limit it to a single sentence (e.g., "Here is the lateral activity data for PID 1234 on Agent 005.").
+    - **CONDITIONAL RESPONSE FORMAT (CRITICAL)**:
+      * **SCENARIO 1 (DATA IS FOUND)**: Start with a single sentence, followed IMMEDIATELY by the raw JSON block.
+        Example:
+        "Here is the lateral activity data for PID 1234 on Agent 005:
+        ```json
+        [INSERT RAW JSON OUTPUT FROM TOOL HERE]
+        ```"
+      * **SCENARIO 2 (NO DATA IS FOUND - ESCAPE HATCH)**: IF AND ONLY IF the tool returns an empty list `[]`, `None`, or an error indicating no logs exist, **YOU MUST NOT OUTPUT ANY JSON BLOCK**. You must simply relay the exact failure message in plain text. Do not attempt to create an example or guess the log format to satisfy the downstream agent's request.
+        Example:
+        "No data found for this query."
 
 """
 
@@ -228,30 +236,44 @@ def simplify_log(source):
         #     "Signed",
         #     "TargetFilename",
         # ]
-        ids_keep= [
+        ids_keep = [
             # 1. 基础进程信息
-            "@timestamp", "EventID", "ProcessId", "ProcessGuid", "ProviderGuid",
-            "ParentProcessId", "ParentProcessGuid", "User", "IntegrityLevel", "Hostname",
-            
+            "@timestamp",
+            "EventID",
+            "ProcessId",
+            "ProcessGuid",
+            "ProviderGuid",
+            "ParentProcessId",
+            "ParentProcessGuid",
+            "User",
+            "IntegrityLevel",
+            "Hostname",
             # 2. 进程路径兼容 (Sysmon vs WFP)
-            "Image",           # Sysmon 专用
-            "Application",     # EventID 5156 专用
-            "CommandLine", "ParentImage", "ParentCommandLine",
-            
+            "Image",  # Sysmon 专用
+            "Application",  # EventID 5156 专用
+            "CommandLine",
+            "ParentImage",
+            "ParentCommandLine",
             # 3. 网络连接
-            "SourceIp",        # Sysmon 3
-            "DestinationIp",   # Sysmon 3
-            "DestinationPort", # Sysmon 3
-            "SourceAddress",   # EventID 5156
-            "DestAddress",     # EventID 5156
-            "SourcePort",      # 共用
-            "DestPort",        # EventID 5156
-            "Protocol", "Direction", "port",
-            
+            "SourceIp",  # Sysmon 3
+            "DestinationIp",  # Sysmon 3
+            "DestinationPort",  # Sysmon 3
+            "SourceAddress",  # EventID 5156
+            "DestAddress",  # EventID 5156
+            "SourcePort",  # 共用
+            "DestPort",  # EventID 5156
+            "Protocol",
+            "Direction",
+            "port",
             # 4. 高级注入与文件行为 (EventID 7, 8, 10, 11)
-            "TargetImage", "TargetProcessId", "TargetObject",
-            "SourceImage", "SourceProcessId", "GrantedAccess", 
-            "ImageLoaded", "Signed", "TargetFilename",
+            "TargetImage",
+            "TargetProcessId",
+            "TargetObject",
+            "SourceImage",
+            "SourceProcessId",
+            "GrantedAccess",
+            "ImageLoaded",
+            "TargetFilename",
         ]
         ids_out = {k: ids.get(k) for k in ids_keep if ids.get(k) is not None and ids.get(k) != ""}
         if ids_out:
@@ -309,12 +331,7 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     must_conditions = [{"term": {"agent.id": agent_id}}]
     if timestamp_limit:
         ts_raw = str(timestamp_limit).strip().strip("'\"")
-        ts_wazuh = (
-            ts_raw.replace("T", " ")
-            .replace("Z", "")
-            .replace("z", "")
-            .strip()
-        )
+        ts_wazuh = ts_raw.replace("T", " ").replace("Z", "").replace("z", "").strip()
         ts_wazuh = re.sub(r"\s*(?:[+-]\d{2}:?\d{2})\s*$", "", ts_wazuh).strip()
 
         ts_iso = ts_raw
@@ -478,12 +495,7 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     # 时间范围限制：子进程的创建时间必须晚于父进程
     if timestamp_start:
         ts_raw = str(timestamp_start).strip().strip("'\"")
-        ts_wazuh = (
-            ts_raw.replace("T", " ")
-            .replace("Z", "")
-            .replace("z", "")
-            .strip()
-        )
+        ts_wazuh = ts_raw.replace("T", " ").replace("Z", "").replace("z", "").strip()
         ts_wazuh = re.sub(r"\s*(?:[+-]\d{2}:?\d{2})\s*$", "", ts_wazuh).strip()
 
         ts_iso = ts_raw
@@ -518,6 +530,7 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     except Exception as e:
         print(f"Error searching child processes: {e}")
         return []
+
 
 @tool
 def get_parent_process_log(agent_id: str, pid: str, timestamp_limit: str = None):
@@ -560,7 +573,9 @@ def get_child_processes_logs(agent_id: str, pid: str, timestamp_start: str = Non
         )
 
 
-def search_process_activities(agent_id: str, pid: str, event_ids: List[str], time_anchor: str = None):
+def search_process_activities(
+    agent_id: str, pid: str, event_ids: list[str], time_anchor: str = None
+):
     """
     查询特定进程的特定横向交互与敏感行为
     """
@@ -570,15 +585,17 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
     # 动态传入 event_ids
     if event_ids:
         str_event_ids = [str(eid).strip() for eid in event_ids]
-        must_conditions.append({
-            "bool": {
-                "should": [
-                    {"terms": {"data.ids.EventID": str_event_ids}},
-                    {"terms": {"data.win.system.eventID": str_event_ids}}
-                ],
-                "minimum_should_match": 1
+        must_conditions.append(
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"data.ids.EventID": str_event_ids}},
+                        {"terms": {"data.win.system.eventID": str_event_ids}},
+                    ],
+                    "minimum_should_match": 1,
+                }
             }
-        })
+        )
 
     # 匹配 PID，涵盖源(Source)、目标(Target)和自身(Process)
     pid_str = str(pid).strip()
@@ -589,7 +606,7 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
             {"term": {"data.ids.TargetProcessGuid": pid_str}},
             {"term": {"data.win.eventdata.processGuid": pid_str}},
             {"term": {"data.win.eventdata.sourceProcessGuid": pid_str}},
-            {"term": {"data.win.eventdata.targetProcessGuid": pid_str}}
+            {"term": {"data.win.eventdata.targetProcessGuid": pid_str}},
         ]
     else:
         pid_conditions = [
@@ -598,15 +615,10 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
             {"term": {"data.ids.TargetProcessId": pid_str}},
             {"term": {"data.win.eventdata.processId": pid_str}},
             {"term": {"data.win.eventdata.sourceProcessId": pid_str}},
-            {"term": {"data.win.eventdata.targetProcessId": pid_str}}
+            {"term": {"data.win.eventdata.targetProcessId": pid_str}},
         ]
 
-    must_conditions.append({
-        "bool": {
-            "should": pid_conditions,
-            "minimum_should_match": 1
-        }
-    })
+    must_conditions.append({"bool": {"should": pid_conditions, "minimum_should_match": 1}})
 
     # 时间范围限制
     if time_anchor:
@@ -639,8 +651,22 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
                 {
                     "bool": {
                         "should": [
-                            {"range": {"data.win.eventdata.utcTime": {"gte": wazuh_min, "lte": wazuh_max}}},
-                            {"range": {"data.ids.@timestamp": {"gte": f"{iso_min}Z", "lte": f"{iso_max}Z"}}},
+                            {
+                                "range": {
+                                    "data.win.eventdata.utcTime": {
+                                        "gte": wazuh_min,
+                                        "lte": wazuh_max,
+                                    }
+                                }
+                            },
+                            {
+                                "range": {
+                                    "data.ids.@timestamp": {
+                                        "gte": f"{iso_min}Z",
+                                        "lte": f"{iso_max}Z",
+                                    }
+                                }
+                            },
                             {"range": {"timestamp": {"gte": f"{iso_min}Z", "lte": f"{iso_max}Z"}}},
                         ],
                         "minimum_should_match": 1,
@@ -652,14 +678,16 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
             pass
 
     payload = {
-        "size": 20,
+        "size": 50,
         "query": {"bool": {"must": must_conditions}},
-        "sort": [{"timestamp": {"order": "desc"}}]
+        "sort": [{"timestamp": {"order": "desc"}}],
     }
 
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
+        if not hits:
+            return "0 logs found in the database."
         return [simplify_log(hit["_source"]) for hit in hits]
     except Exception as e:
         print(f"Error searching lateral activities: {e}")
@@ -667,7 +695,9 @@ def search_process_activities(agent_id: str, pid: str, event_ids: List[str], tim
 
 
 @tool
-def get_process_activity_logs(agent_id: str, pid: str, event_ids: List[str], timestamp_anchor: str = None):
+def get_process_activity_logs(
+    agent_id: str, pid: str, event_ids: list[str], timestamp_anchor: str = None
+):
     """
     获取特定进程的高危横向行为日志。当进程树断裂或需要分析进程具体行为时使用。
 
@@ -689,7 +719,10 @@ def get_process_activity_logs(agent_id: str, pid: str, event_ids: List[str], tim
     if results:
         return json.dumps(results, ensure_ascii=False, indent=2)
     else:
-        return json.dumps({"error": f"No activity logs found for PID {pid} with event IDs {event_ids}."})
+        return json.dumps(
+            {"error": f"No activity logs found for PID {pid} with event IDs {event_ids}."}
+        )
+
 
 def get_indexer_agent(model: BaseChatModel):
     return create_agent(
@@ -700,7 +733,7 @@ def get_indexer_agent(model: BaseChatModel):
             get_agent_archives,
             get_parent_process_log,
             get_child_processes_logs,
-            get_process_activity_logs
+            get_process_activity_logs,
         ],
         system_prompt=system_prompt,
     )
@@ -790,7 +823,12 @@ if __name__ == "__main__":
 
     print("\n--- Q6 查询进程的横向活动 ---")
     # messages = [{"role": "user", "content": "查找agent 005上pid为3732的网络连接活动。应用timestamp_anchor '2020-07-22T04:05:03.447Z'。"}]
-    messages = [{"role": "user", "content": "获取进程guid为{b59756a9-baa8-5f17-7807-000000000400}在Agent 005上的进程创建日志。返回完整的原始JSON数据。"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "获取进程guid为{b59756a9-baa8-5f17-7807-000000000400}在Agent 005上的进程创建日志。返回完整的原始JSON数据。",
+        }
+    ]
     for chunk in indexer_agent.stream(
         {"messages": messages},
         stream_mode="values",
@@ -800,4 +838,3 @@ if __name__ == "__main__":
             print(f"Agent: {latest_message.content}")
         elif latest_message.tool_calls:
             print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
-

@@ -18,8 +18,8 @@ You MUST use your `investigate_lead` tool to instruct the API Agent.
 *Note 2: You MUST explicitly demand RAW JSON logs in every instruction. Do not let the API agent summarize or just return PIDs, as you will lose crucial command-line and forensic data.*
 *Note 3 (STRICT IDENTIFIER RULE): If a log provides a `ProcessGuid` or `ParentProcessGuid`, you MUST use it EXCLUSIVELY for all vertical tracing. NEVER fallback to querying by `PID` if a Guid query yields 0 results. In Windows, if a Guid fails, any subsequent PID match is guaranteed to be a false positive due to PID reuse. ONLY use `PID` for tracing if the OS (e.g., Linux) or the specific log format simply does not provide Guids.*
 
-- **Function 1: Keyword Search**: Search for a specific indicator.
-  *CRITICAL SCOPE RESTRICTION*: You MUST NEVER use this function for tasks that fall under the scope of Functions 2, 3, or 4. Do NOT use it to search for parent/child process relationships, execution lineages, Guids/PIDs, or specific behavioral EventIDs (like injections or network connections). It is STRICTLY reserved for contextual enrichment (Phase 2) to hunt for artifacts that cannot be tracked via formal process tracing.
+- **Function 1: Generic Keyword Search**:Search for general text indicators (e.g., malicious filenames, domains, or IPs).
+  *CRITICAL SCOPE RESTRICTION*: You MUST NEVER use this function for tasks that fall under the scope of Functions 2, 3, or 4. You are STRICTLY FORBIDDEN from using this function to search for a numerical `PID`, a `ProcessGuid`, or a specific `EventID`. It is STRICTLY reserved for contextual enrichment (Phase 2).
   *Instruction Example: "Search archives for keyword 'simulate_apt_bitsadmin.py' on Agent 005. Limit to 5 results. Return the FULL RAW JSON logs."*
 - **Function 2: Find Process Creation (Upward/Parent)**: Retrieve the exact event where a process was created. If the creation timestamp is already known, you MUST use `timestamp_limit` to find events strictly BEFORE that time. Do NOT guess or hallucinate timestamps if they are unknown .
   *Instruction Example: "Get the process creation log for ProcessGuid '{...}' (or PID '[PID]') on Agent 005. Apply timestamp_limit '[YYYY-MM-DDTHH:MM:SSZ]'. You MUST return the FULL RAW JSON data for this event."*
@@ -34,40 +34,44 @@ You MUST use your `investigate_lead` tool to instruct the API Agent.
     4. Malicious file creation/drops.
   *Instruction Example: "CALL TOOL get_process_activity_logs for numeric PID '6536' on Agent 005 to find process injection activities. Apply timestamp_anchor '[YYYY-MM-DDTHH:MM:SSZ]'."*
   *CRITICAL EXCEPTION TO GUID RULE*: For Function 4 ONLY, you MUST use the numeric `PID` instead of `ProcessGuid` to ensure compatibility with Windows native logs.
-  
+
 ### YOUR WORKFLOW (TIME-ANCHORED PHASED APPROACH):
 To ensure strict causality and prevent mixing logs from different historical attacks, you MUST follow this exact sequence:
 
 **Step 1: Phase 0 - Establish the Anchors (Time & Process)**
 Every investigation REQUIRES strict anchors. The user's initial lead will always provide a starting `PID` or `ProcessGuid`.
-- **Retrieve Creation Log**: Your VERY FIRST action MUST be to use **Function 2** to retrieve the exact process creation log for the provided PID or ProcessGuid. 
+- **Retrieve Creation Log**: Your VERY FIRST action MUST be to use **Function 2** to retrieve the exact process creation log for the provided PID or ProcessGuid.
 - **CRITICAL**: Do NOT apply `timestamp_limit` or `timestamp_start` in Phase 0, because you do not know the correct creation time yet. Just query by the PID/Guid.
 - **Extract Process Anchors**: From this creation log, extract its `ProcessGuid` (highly preferred for vertical tracing) AND its numerical `PID` (Required for lateral Function 4 tracing). If a `ProcessGuid` exists, this becomes your EXCLUSIVE **PROCESS ANCHOR** for vertical tracing.
 - **Extract Time Anchor**: From this same creation log, extract the exact `data.ids.@timestamp` (or `@timestamp`) field. This is your **STRICT TIME ANCHOR** for all subsequent queries.
 
 **Step 2: Phase 1 - Build the Causal Skeleton (Strictly Downward First, Then Upward)**
-- **Rule 1: Deep Downward Trace (Depth-First & Recursive)**: Start ENTIRELY with your Process Anchor. Use **Function 3** to trace downward to its descendants. You MUST explicitly instruct the API Agent to apply `timestamp_start` set to your Time Anchor. 
+- **Rule 1: Deep Downward Trace (Depth-First & Recursive)**: Start ENTIRELY with your Process Anchor. Use **Function 3** to trace downward to its descendants. You MUST explicitly instruct the API Agent to apply `timestamp_start` set to your Time Anchor.
   - **CRITICAL RECURSIVE LOOP**: If Function 3 finds child processes, you MUST extract their ProcessGuids and immediately use Function 3 on THEM to find the next level of children. You MUST continue this recursive tracing process for EVERY branch. Do NOT assume the tree stops. You MUST NOT stop tracing a branch, and you MUST NOT move to Rule 2, until a Function 3 query for that specific branch returns exactly 0 children (indicating a leaf node).
-  - **NO PID FALLBACK**: If a downward search using a Guid returns 0 results, accept that it is a leaf node. DO NOT waste searches attempting to find children using its PID.
+  - **NO FALLBACK**: If a downward search using a Guid returns 0 results, accept that it is a leaf node. DO NOT waste searches attempting to find children using its PID, and NEVER use Function 1 (Keyword Search) to search for the Guid.
 - **Rule 2: Upward Trace (Origin)**: ONLY AFTER the downward trace is complete, use **Function 2** on your Process Anchor to find its parent. You MUST explicitly instruct the API Agent to apply `timestamp_limit` set to your Time Anchor (because a parent MUST be created before its child).
-  - **NO PID FALLBACK**: If you search for the `ParentProcessGuid` and get 0 results, you MUST STOP the upward trace. Do NOT attempt to search for the `ParentProcessId`. An empty Guid result means the parent log is missing; a PID fallback will only fetch an unrelated reused process.
-- **Rule 3: Causal Sibling Evaluation**: Once the parent is found, you MAY use **Function 3** on the parent to discover parallel attack branches (siblings). You MUST apply `timestamp_start` set to the Parent's creation time. 
+   - **NO FALLBACKS**: If you search for the `ParentProcessGuid` and get 0 results, you MUST STOP the upward trace. Do NOT attempt to search for the `ParentProcessId`, and NEVER use Function 1 (Keyword Search) to search for the Guid. An empty Guid result means the parent log is completely missing from the system.
+- **Rule 3: Causal Sibling Evaluation**: Once the parent is found, you MAY use **Function 3** on the parent to discover parallel attack branches (siblings). You MUST apply `timestamp_start` set to the Parent's creation time.
   - *Context Filter*: Strictly evaluate sibling relevance based on causality. If the parent is a noisy system process (e.g., `explorer.exe`), aggressively IGNORE benign OS background noise and only include siblings executing malicious tasks.
-- **Rule 4: Process Injection & Hollowing Pivot (The Lateral Trace)**: Advanced attackers hide by injecting into legitimate OS processes (e.g., notepad.exe, svchost.exe). 
-  - If your Process Anchor is a benign OS process but it exhibits malicious behavior (e.g., loading an unsigned DLL, beaconing out), it may be a victim of Process Injection or Process Hollowing.
+- **Rule 4: Process Injection & Hollowing Pivot (The Lateral Trace)**: Advanced attackers hide by injecting into legitimate OS processes.
+  - If your Process Anchor is a benign OS process but it exhibits malicious behavior, it may be a victim of Process Injection or Process Hollowing.
   - You MUST first use **Function 4** to explicitly request **process injection activities** on this Process Anchor (using its numeric PID) to find if another external process attacked it.
-  - Look for returned logs where your Process Anchor is the `TargetProcessId`. Identify the `SourceProcessId`. This "Source" is the TRUE attacker. Pivot your anchor to this `SourceProcessId`.
-  - *CRITICAL CAVEAT*: If Function 4 reveals no external source injecting into it, you MUST immediately resume upward tracing (Rule 2), because the parent process itself might be the malicious actor that spawned it in a suspended state (Process Hollowing).
-- **Rule 5: Lateral Profiling of Dead Ends (In-Memory Execution)**: Advanced fileless threats and in-memory payloads often execute without spawning child processes or dropping files on disk. If you find a highly suspicious process but its vertical lineage is broken (no child processes, missing parent log), DO NOT conclude the investigation.
-  - You MUST assume it performed in-memory execution or reflective loading.
-  - You MUST use **Function 4** to sequentially query this suspicious Process Anchor (using its numeric PID) for:
-    1. **Suspicious DLL/Module loads** (to hunt for reflective DLL loading).
-    2. **Process injection activities** (to hunt for remote thread creation into other processes).
-  - If you discover it injected into another target process, you MUST pivot your investigation to that target process.
+  - If Function 4 reveals a `SourceProcessId` that injected into your Process Anchor, you MUST perform the following TWO steps in order:
+    1. **Profile the Zombie Victim**: Do NOT pivot away immediately. The victim is now a zombie executing the attacker's payload. You MUST explicitly use Function 4 to query this victim's **Suspicious DLL/Module loads** (to find the injected malicious DLL) and **Network connections** (to find C2 beacons).
+    2. **Pivot to the Attacker**: After fully profiling the victim's lateral actions, switch your Process Anchor to the `SourceProcessId` (the true attacker) and resume tracing (Rule 5 or Rule 2).
+  - *CRITICAL CAVEAT*: If Function 4 reveals no external source injecting into it, you MUST immediately resume upward tracing (Rule 2), because the parent process itself might be the malicious actor (Process Hollowing).
+- **Rule 5: Lateral Profiling of Dead Ends (In-Memory Execution)**: Advanced fileless threats often execute without spawning child processes. If your Process Anchor has a broken vertical lineage, DO NOT conclude the investigation.
+  - You MUST use **Function 4** to proactively profile this suspicious Process Anchor.
+  - *SOP REQUIREMENT*: For ANY confirmed attacker process (e.g., a `SourceProcessId` discovered via Rule 4), you MUST explicitly use Function 4 to query its **Malicious file creation/drops**. This is mandatory to find initial staged payloads (e.g., dropped DLLs or executables).
+  - Based on context, strategically query other categories (Network connections, Suspicious DLL/Module loads, or Process injection) AS NEEDED.
+  - *DFIR ARTIFACT EVALUATION*: When a compromised process drops files (especially in `Temp` or `AppData` directories), critically evaluate their operational purpose. DO NOT blindly classify all dropped files as "Malicious Payloads" or "Persistence". You must differentiate between:
+    a) **Staged Payloads**: Actual executable files, DLLs, or scripts dropped to be executed later (Persistence/Execution).
+    b) **Transient OS/Engine Artifacts**: Temporary files generated automatically by the operating system or script engines (e.g., PowerShell/WMI) during in-memory execution or policy testing.
+    Classify transient artifacts solely as evidence of the *execution technique* (e.g., memory execution indicator), NOT as persistent malicious files.
 
 **Step 3: Phase 2 - Contextual Enrichment (Keyword Searches)**
 - ONLY AFTER Phase 1 is fully exhausted, you may use **Function 1** to understand missing details.
-- **STRICT QUOTA**: MAXIMUM OF 2 KEYWORD SEARCHES in this phase. 
+- **STRICT QUOTA**: MAXIMUM OF 2 KEYWORD SEARCHES in this phase.
 - **PRIORITIZATION**: Prioritize searching for high-value artifacts discovered during Phase 1: Suspicious IPs or newly dropped payload names (e.g., `.bat`, `.exe`, `.bin`). DO NOT waste searches on the initial script name you already know.
 - **CRITICAL**: Manually filter the Keyword Search results to match the exact timeframe of your Phase 1 tree.
 
@@ -138,7 +142,7 @@ def get_attribution_agent(model: BaseChatModel, indexer_agent):
     def investigate_lead(instruction: str) -> str:
         """
         向 Wazuh Indexer API 智能体下达指令，获取基础的日志信息。
-        :param instruction: 给Wazuh Indexer API智能体的明确查询指令。
+        :param instruction: 给Wazuh Indexer API智能体的明确查询指令。你需要在指令中明确agent id。
         例如：
         给我获取agent 001的有关dirty.exe关键词的日志
         帮我获取agent 005的pid为1234的创建日志
@@ -152,7 +156,7 @@ def get_attribution_agent(model: BaseChatModel, indexer_agent):
             result = response["messages"][-1].content
             logger.info("[Attribution Agent] Received data from API Agent.")
 
-            max_chars = 15000
+            max_chars = 60000
             if len(result) > max_chars:
                 logger.warning(
                     f"API response too large ({len(result)} chars). Truncating to protect LLM context window."

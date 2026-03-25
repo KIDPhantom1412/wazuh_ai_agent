@@ -1,10 +1,10 @@
 import pytest
-from agentevals.trajectory.match import create_trajectory_match_evaluator
-from langchain.messages import AIMessage, HumanMessage, ToolMessage
+from langchain.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from core.config import settings
 from agents.attribution_agent import get_attribution_agent
+from core.config import settings
+
 
 @pytest.fixture
 def demo_model():
@@ -31,7 +31,7 @@ class MockIndexerAgent:
 
         parent_keywords = {"creation", "parent", "创建", "父进程"}
         child_keywords = {"child", "子进程", "派生"}
-        kwsearch_keywords = {"关键词","keyword"}
+        kwsearch_keywords = {"关键词", "keyword"}
         # 查询进程创建日志
         if "1234" in instruction and any(kw in instruction for kw in parent_keywords):
             mock_creation_json = """
@@ -71,7 +71,6 @@ class MockIndexerAgent:
         return {"messages": [AIMessage(content="[]")]}
 
 
-
 @pytest.fixture
 def mock_indexer_agent():
     """模拟 API 智能体"""
@@ -100,6 +99,3 @@ def test_attribution_agent(demo_model, mock_indexer_agent):
         if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
             tool_calls.extend(m.tool_calls)
     assert len(tool_calls) >= 4
-
-
-
