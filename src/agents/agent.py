@@ -1,8 +1,10 @@
 from langchain_openai import ChatOpenAI
 
 from agents.attribution_agent import get_attribution_agent
+from agents.attribution_agent2 import get_attribution_agent2
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
+from agents.indexer_agent2 import get_indexer_agent2
 from agents.response_agent import get_response_agent
 from core.config import settings
 
@@ -16,3 +18,5 @@ demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
 response_agent = get_response_agent(model)
 attribution_agent = get_attribution_agent(model, indexer_agent)
+indexer_agent2 = get_indexer_agent2(model)
+attribution_agent2 = get_attribution_agent2(model, indexer_agent2)
