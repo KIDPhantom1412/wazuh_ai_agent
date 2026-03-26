@@ -6,6 +6,7 @@ from typing import Any, Literal
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -305,7 +306,60 @@ def log_retrieval_feasibility_node(
     def query_archived_logs(query_body: dict) -> str:
         """Search archived logs in Wazuh indexer using Elasticsearch query body."""
         response = search_archived_logs(query_body)
-        return json.dumps(response, ensure_ascii=False)
+        raw_hits = response.get("hits", {}).get("hits", [])
+
+        def compact_source(source: Any) -> dict[str, Any]:
+            if not isinstance(source, dict):
+                return {}
+            result = {
+                "agent": source.get("agent"),
+                "manager": source.get("manager"),
+                "decoder": source.get("decoder"),
+                "rule": source.get("rule"),
+                "location": source.get("location"),
+                "@timestamp": source.get("@timestamp"),
+                "timestamp": source.get("timestamp"),
+                "id": source.get("id"),
+                "data": source.get("data"),
+                "full_log": source.get("full_log"),
+            }
+            full_log_value = result.get("full_log")
+            if isinstance(full_log_value, str) and len(full_log_value) > 1200:
+                result["full_log"] = f"{full_log_value[:1200]}...(truncated)"
+            return {
+                key: value
+                for key, value in result.items()
+                if value not in (None, "", {}, [])
+            }
+
+        compact_hits = []
+        for hit in raw_hits[:10]:
+            compact_hits.append(
+                {
+                    "_index": hit.get("_index"),
+                    "_id": hit.get("_id"),
+                    "_source": compact_source(hit.get("_source")),
+                }
+            )
+
+        total_hits = response.get("hits", {}).get("total", {})
+        if isinstance(total_hits, dict):
+            total_value = total_hits.get("value", 0)
+        elif isinstance(total_hits, int):
+            total_value = total_hits
+        else:
+            total_value = 0
+
+        payload = {
+            "meta": {
+                "took": response.get("took"),
+                "timed_out": response.get("timed_out"),
+                "total_hits": total_value,
+                "returned_hits": len(compact_hits),
+            },
+            "hits": compact_hits,
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
     def extract_json(text: str) -> dict[str, Any]:
         text = (text or "").strip()
@@ -398,9 +452,9 @@ Do not output markdown.""",
             [
                 (
                     "system",
-                    """You are an expert in Wazuh logs. Analyze the following retrieved logs and the user's requirement.
+                    """You are an expert in Wazuh logs. Analyze the following retrieved logs and rule requirement parameters.
 Determine if it is feasible to generate a rule.
-User Requirement: {reqs}
+Rule Requirement Parameters (structured): {reqs}
 Retrieved Logs (First {count}): {logs}
 Analyze the logs for:
 1. Field composition
@@ -417,11 +471,24 @@ If no relevant logs are found or data is insufficient, return feasible=False and
 
         chain = prompt | model | parser
         logs_sample = logs[:5]
+        prompt_logs: list[Any] = []
+        for item in logs_sample:
+            if not isinstance(item, dict):
+                prompt_logs.append(item)
+                continue
+            normalized_item = dict(item)
+            full_log_value = normalized_item.get("full_log")
+            if isinstance(full_log_value, str):
+                try:
+                    normalized_item["full_log_parsed"] = json.loads(full_log_value)
+                except Exception:
+                    pass
+            prompt_logs.append(normalized_item)
         result = chain.invoke(
             {
-                "reqs": str(reqs),
-                "logs": json.dumps(logs_sample, indent=2),
-                "count": len(logs_sample),
+                "reqs": json.dumps(reqs, ensure_ascii=False, indent=2),
+                "logs": json.dumps(prompt_logs, ensure_ascii=False, indent=2),
+                "count": len(prompt_logs),
                 "format_instructions": parser.get_format_instructions(),
             }
         )
@@ -621,13 +688,25 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     elif verification_feedback and "deleted" in str(verification_feedback):
         prompt_text = "The rule has been deleted as requested. Confirm this to the user."
     elif logtest_passed:
-        prompt_text = f"The rule has been generated, verified, and passed logtest. Rule content: \n{generated_rule}\n. Ask the user if they want to keep it applied (It is currently applied for testing). If they say no, I will delete it."
+        content = (
+            "规则已生成并通过验证。以下是当前规则内容：\n\n"
+            f"```xml\n{generated_rule}\n```\n\n"
+            "请您确认是否保留并持续应用该规则。\n"
+            "如果您希望调整规则内容，也可以直接告诉我修改意见，我会重新生成。"
+        )
+        return {"messages": [AIMessage(content=content)]}
     elif validation_error:
         prompt_text = (
             f"There was an error during rule verification: {validation_error}. Inform the user."
         )
     elif generated_rule:
-        prompt_text = f"Rule generated successfully: \n{generated_rule}\n. Ask the user if they want to proceed with verification (This involves uploading the rule and restarting the manager)."
+        content = (
+            "规则已成功生成。以下是规则内容：\n\n"
+            f"```xml\n{generated_rule}\n```\n\n"
+            "请先审阅这条规则。如果您有修改意见（例如级别、匹配条件、描述、分组等），可直接告诉我，我会按您的意见调整。\n"
+            "若规则内容确认无误，我再继续执行验证（会上传规则并重启 Wazuh 管理器）。"
+        )
+        return {"messages": [AIMessage(content=content)]}
     else:
         prompt_text = "Summarize the current status."
 
