@@ -1,7 +1,7 @@
-import datetime
 import json
 import logging
 import re
+from enum import Enum
 
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -14,6 +14,15 @@ from wazuh_api.indexer_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class QueryType(str, Enum):
+    PROCESS_ID = "PROCESS_ID"
+    FILE_PATH = "FILE_PATH"
+    IP_ADDRESS = "IP_ADDRESS"
+    PORT = "PORT"
+    SERVICE_NAME = "SERVICE_NAME"
+    USER_ACCOUNT = "USER_ACCOUNT"
 
 
 system_prompt = r"""
@@ -39,7 +48,7 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
     - **Scenario E: Child Processes & Spawned Activity**
       If the user asks for the **child processes** or processes spawned by a specific parent PID (e.g., "What processes were spawned by PID X?"), you MUST call: `get_child_processes_logs`.
 
-    - **Scenario F: Lateral Activity, Injections & Specific Behaviors (CRITICAL FOR ADVANCED THREATS)**
+    - **Scenario F: Lateral Activity, Injections & Specific Behaviors (CRITICAL FOR ADVANCED Threats)**
       If the user asks about what a process *did* laterally—such as network connections, loading DLLs, injecting into other processes, accessing memory, or dropping files—you MUST call: `get_process_activity_logs`.
 
 **2. Strict Tool Isolation (No Fallbacks)**:
@@ -48,8 +57,7 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
 
 **3. DATA HANDLING & ROLE BOUNDARIES (CRITICAL)**:
 You are exclusively a raw data retrieval pipeline for the Attribution Agent. You MUST adhere strictly to the following constraints:
-    - **ZERO HALLUCINATION (ABSOLUTE RULE)**: You are a dumb data pipeline. You MUST NOT generate, simulate, or mock any JSON data. If the tool returns `[]`, `None`, or an error, you MUST EXACTLY output: "No data found for this query." Do not attempt to create an example or guess the log format.
-    - **Raw JSON Only**: Output the actual, unmodified JSON data exactly as returned by your tools. This preserves crucial forensic fields (PIDs, command lines, timestamps) preventing data loss for the downstream agent.
+    - **ZERO HALLUCINATION (ABSOLUTE RULE)**: You are a dumb data pipeline. You MUST NOT generate, simulate, or mock any JSON data under any circumstances.
     - **No Analysis or Summarization**: DO NOT explain what the logs mean, describe the attack flow, or generate reports (e.g., "Key Findings", "Attack Source"). Leave all attribution and visualization to the other agent.
     - **No Remediation**: Do not suggest response strategies or remediation steps.
     - **CONDITIONAL RESPONSE FORMAT (CRITICAL)**:
@@ -59,10 +67,9 @@ You are exclusively a raw data retrieval pipeline for the Attribution Agent. You
         ```json
         [INSERT RAW JSON OUTPUT FROM TOOL HERE]
         ```"
-      * **SCENARIO 2 (NO DATA IS FOUND - ESCAPE HATCH)**: IF AND ONLY IF the tool returns an empty list `[]`, `None`, or an error indicating no logs exist, **YOU MUST NOT OUTPUT ANY JSON BLOCK**. You must simply relay the exact failure message in plain text. Do not attempt to create an example or guess the log format to satisfy the downstream agent's request.
+      * **SCENARIO 2 (NO DATA IS FOUND - ESCAPE HATCH)**: IF AND ONLY IF the tool returns a JSON indicating an error or empty results (e.g., `{"error": ...}`), **YOU MUST NOT OUTPUT ANY JSON BLOCK**. You must simply relay the exact failure message in plain text. Do not attempt to create an example or guess the log format to satisfy the downstream agent's request.
         Example:
         "No data found for this query."
-
 """
 
 
@@ -70,12 +77,11 @@ You are exclusively a raw data retrieval pipeline for the Attribution Agent. You
 def get_count_agent_alerts(agent_id, starttime, endtime):
     """
     从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 在指定时间段内的告警日志总数。
+
     :param agent_id: Agent 的唯一 ID (如 "001")。
     :param starttime: 查询的起始时间。支持相对时间 (如 "now-24h") 或绝对时间 (ISO8601 格式)。
     :param endtime: 查询的结束时间。默认为 "now"。支持相对或绝对时间。
-    :return: 匹配条件的告警总数。
     """
-
     response_data = count_agent_alerts(agent_id, starttime, endtime)
     count = response_data.get("count", 0)
 
@@ -91,13 +97,12 @@ def get_count_agent_alerts(agent_id, starttime, endtime):
 def get_agent_alerts(agent_id, x_limit, ruleId):
     """
     从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 的告警日志，支持按 Rule ID 过滤。
+
     :param agent_id: Agent 的唯一 ID (如 "001")
     :param x_limit: 返回的告警条数
     :param ruleId: 规则 ID (如 5710)，默认为 -1 (不进行规则过滤)
     """
-
     search_results = agent_alerts(agent_id, x_limit, ruleId)
-
     hits = search_results.get("hits", {}).get("hits", [])
     alerts = [hit["_source"] for hit in hits]
 
@@ -107,20 +112,16 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
 @tool
 def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
     """
-    从 Wazuh Indexer 的 wazuh-archives-*  获取特定 Agent 的日志，支持关键词搜索。
+    从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的日志，支持关键词搜索。
+
     :param agent_id: Agent 的唯一 ID (如 "001")
     :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
     :param x_limit: 返回的日志条数, 默认为 10
     """
-
     search_results = agent_archives(
         agent_id, keyword=keyword, x_limit=x_limit, payload=None, timeout=300
     )
-
     hits = search_results.get("hits", {}).get("hits", [])
-    archives = [hit["_source"] for hit in hits]
-
-    # 日志简化
     archives = [simplify_log(hit["_source"]) for hit in hits]
 
     return json.dumps(archives, ensure_ascii=False)
@@ -129,7 +130,7 @@ def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
 def simplify_log(source):
     """
     用于提取单条日志关键内容，并保持字段路径与原始日志一致。
-    仅针对 Windows EventChannel (win) 与 OTRF (ids) 类型进行简化。
+    仅针对 Windows EventChannel (win) 类型进行简化。
     """
     if not isinstance(source, dict):
         return source
@@ -138,14 +139,11 @@ def simplify_log(source):
     if not isinstance(data, dict):
         return source
 
-    ids = data.get("ids", {})
     win = data.get("win", {})
 
-    # 暂时只处理 ids 和 win 类型的日志；其他类型的日志直接返回
-    if not (isinstance(ids, dict) and ids) and not (isinstance(win, dict) and win):
+    if not (isinstance(win, dict) and win):
         return source
 
-    # 该函数用于递归地简化嵌套的字典或列表，移除空值、空字典、空列表
     def _prune(obj):
         if isinstance(obj, dict):
             cleaned = {}
@@ -173,11 +171,10 @@ def simplify_log(source):
 
     out = {}
 
-    # 下面是字段提取逻辑
-
-    # for ts_key in ("@timestamp", "timestamp"):
-    #     if source.get(ts_key):
-    #         out[ts_key] = source.get(ts_key)
+    if source.get("timestamp"):
+        out["timestamp"] = source.get("timestamp")
+    elif source.get("@timestamp"):
+        out["@timestamp"] = source.get("@timestamp")
 
     agent = source.get("agent", {})
     if isinstance(agent, dict) and agent.get("id"):
@@ -201,203 +198,114 @@ def simplify_log(source):
         if rule_out:
             out["rule"] = rule_out
 
-    # ids场景
-    if isinstance(ids, dict) and ids:
-        # ids_keep = [
-        #     "UtcTime",
-        #     "EventID",
-        #     "ProcessId",
-        #     "ProcessGuid",
-        #     "ProviderGuid",
-        #     "ParentProcessId",
-        #     "ParentProcessGuid",
-        #     "port",
-        #     "Image",
-        #     "CommandLine",
-        #     "ParentImage",
-        #     "ParentCommandLine",
-        #     "TargetObject",
-        #     "User",
-        #     "IntegrityLevel",
-        #     "DestAddress",
-        #     "DestPort",
-        #     "SourceAddress",
-        #     "SourcePort",
-        #     "Protocol",
-        #     "Direction",
-        #     "Hostname",
-        #     # "@timestamp",
-        #     "TargetImage",
-        #     "TargetProcessId",
-        #     "SourceImage",
-        #     "SourceProcessId",
-        #     "GrantedAccess",
-        #     "ImageLoaded",
-        #     "Signed",
-        #     "TargetFilename",
-        # ]
-        ids_keep = [
-            # 1. 基础进程信息
-            "@timestamp",
-            "EventID",
-            "ProcessId",
-            "ProcessGuid",
-            "ProviderGuid",
-            "ParentProcessId",
-            "ParentProcessGuid",
-            "User",
-            "IntegrityLevel",
-            "Hostname",
-            # 2. 进程路径兼容 (Sysmon vs WFP)
-            "Image",  # Sysmon 专用
-            "Application",  # EventID 5156 专用
-            "CommandLine",
-            "ParentImage",
-            "ParentCommandLine",
-            # 3. 网络连接
-            "SourceIp",  # Sysmon 3
-            "DestinationIp",  # Sysmon 3
-            "DestinationPort",  # Sysmon 3
-            "SourceAddress",  # EventID 5156
-            "DestAddress",  # EventID 5156
-            "SourcePort",  # 共用
-            "DestPort",  # EventID 5156
-            "Protocol",
-            "Direction",
-            "port",
-            # 4. 高级注入与文件行为 (EventID 7, 8, 10, 11)
-            "TargetImage",
-            "TargetProcessId",
-            "TargetObject",
-            "SourceImage",
-            "SourceProcessId",
-            "GrantedAccess",
-            "ImageLoaded",
-            "TargetFilename",
-        ]
-        ids_out = {k: ids.get(k) for k in ids_keep if ids.get(k) is not None and ids.get(k) != ""}
-        if ids_out:
-            out["data"] = {"ids": ids_out}
+    win_eventdata = win.get("eventdata", {}) if isinstance(win.get("eventdata", {}), dict) else {}
+    win_system = win.get("system", {}) if isinstance(win.get("system", {}), dict) else {}
 
-    # win场景
-    elif isinstance(win, dict) and win:
-        win_eventdata = (
-            win.get("eventdata", {}) if isinstance(win.get("eventdata", {}), dict) else {}
-        )
-        win_system = win.get("system", {}) if isinstance(win.get("system", {}), dict) else {}
+    system_out = {}
+    if win_system.get("eventID") is not None and win_system.get("eventID") != "":
+        system_out["eventID"] = win_system.get("eventID")
 
-        system_out = {}
-        if win_system.get("eventID") is not None and win_system.get("eventID") != "":
-            system_out["eventID"] = win_system.get("eventID")
+    eventdata_keep = [
+        # --- 1. 基础进程上下文 (Event 1, 3, 7, 11) ---
+        "processId",
+        "processGuid",
+        "image",
+        "commandLine",
+        "parentProcessId",
+        "parentProcessGuid",
+        "parentImage",
+        "parentCommandLine",
+        "originalFileName",
+        "integrityLevel",
+        # --- 2. 用户与账号身份 (Event 1, 3, 8, 10, 7045) ---
+        "user",
+        "parentUser",
+        "sourceUser",
+        "targetUser",
+        "accountName",
+        # --- 3. 网络通信记录 (Event 3) ---
+        "sourceIp",
+        "sourcePort",
+        "destinationIp",
+        "destinationPort",
+        "protocol",
+        # --- 4. 文件与模块加载 (Event 7, 11) ---
+        "targetFilename",  # 文件释放关键字段
+        "imageLoaded",  # DLL 劫持/加载关键字段
+        "signed",
+        # --- 5. 进程注入与内存访问 (Event 8, 10) ---
+        "sourceProcessId",
+        "sourceImage",
+        "targetProcessId",
+        "targetImage",
+        "sourceProcessGuid",  # 来自 Event 8
+        "targetProcessGuid",  # 来自 Event 8
+        "sourceProcessGUID",  # 来自 Event 10
+        "targetProcessGUID",  # 来自 Event 10
+        "grantedAccess",
+        "startAddress",
+        "callTrace",
+        # --- 6. 系统服务注册 (Event 7045) ---
+        "serviceName",
+        "imagePath",
+        "serviceType",
+        "startType",
+    ]
 
-        eventdata_keep = [
-            "utcTime",
-            "processId",
-            "processGuid",
-            "parentProcessId",
-            "parentProcessGuid",
-            "image",
-            "commandLine",
-            "parentImage",
-            "parentCommandLine",
-            "targetFilename",
-            "targetObject",
-            "user",
-            "integrityLevel",
-        ]
-        eventdata_out = {
-            k: win_eventdata.get(k)
-            for k in eventdata_keep
-            if win_eventdata.get(k) is not None and win_eventdata.get(k) != ""
-        }
+    eventdata_out = {
+        k: win_eventdata.get(k)
+        for k in eventdata_keep
+        if win_eventdata.get(k) is not None and win_eventdata.get(k) != ""
+    }
 
-        win_out = {}
-        if system_out:
-            win_out["system"] = system_out
-        if eventdata_out:
-            win_out["eventdata"] = eventdata_out
-        if win_out:
-            out["data"] = {"win": win_out}
+    win_out = {}
+    if system_out:
+        win_out["system"] = system_out
+    if eventdata_out:
+        win_out["eventdata"] = eventdata_out
+    if win_out:
+        out["data"] = {"win": win_out}
 
     return _prune(out)
 
 
-def search_parent_process(agent_id, pid, timestamp_limit=None):
+def _format_iso8601(ts_raw: str) -> str:
     """
-    查询特定 PID 的进程创建事件
-    timestamp_limit: 如果存在，则只查找在此时间之前的创建事件
+    辅助函数：将时间字符串格式化为标准的 ISO8601 以匹配 Elasticsearch 的 timestamp
     """
-    # 基础条件
+    if not ts_raw:
+        return None
+    ts_iso = str(ts_raw).strip().strip("'\"")
+    ts_iso = ts_iso.replace(" ", "T", 1) if "T" not in ts_iso and " " in ts_iso else ts_iso
+    if not re.search(r"(Z|z|[+-]\d{2}:?\d{2})$", ts_iso):
+        ts_iso = f"{ts_iso}Z"
+    return ts_iso
+
+
+def search_parent_process(agent_id, pid, start_time=None, end_time=None):
     must_conditions = [{"term": {"agent.id": agent_id}}]
-    if timestamp_limit:
-        ts_raw = str(timestamp_limit).strip().strip("'\"")
-        ts_wazuh = ts_raw.replace("T", " ").replace("Z", "").replace("z", "").strip()
-        ts_wazuh = re.sub(r"\s*(?:[+-]\d{2}:?\d{2})\s*$", "", ts_wazuh).strip()
 
-        ts_iso = ts_raw
-        if "T" not in ts_iso and " " in ts_iso:
-            ts_iso = ts_iso.replace(" ", "T", 1)
-        if not re.search(r"(Z|z|[+-]\d{2}:?\d{2})$", ts_iso):
-            ts_iso = f"{ts_iso}Z"
-        must_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"range": {"data.ids.@timestamp": {"lt": ts_iso}}},
-                        {"range": {"data.win.eventdata.utcTime": {"lt": ts_wazuh}}},
-                        {"range": {"timestamp": {"lt": ts_iso}}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
+    # 统一时间范围查询
+    time_range = {}
+    if start_time:
+        time_range["gte"] = _format_iso8601(start_time)
+    if end_time:
+        time_range["lte"] = _format_iso8601(end_time)
+    if time_range:
+        must_conditions.append({"range": {"timestamp": time_range}})
 
-    # Windows 查询条件 (Sysmon EventID 1 或 IDS EventID 1)
-    win_conditions = [
-        {
-            "bool": {
-                "should": [
-                    {"terms": {"data.win.system.eventID": ["1"]}},
-                    {"terms": {"data.ids.EventID": ["1"]}},
-                ],
-                "minimum_should_match": 1,
-            }
-        },
-    ]
+    win_conditions = [{"terms": {"data.win.system.eventID": ["1"]}}]
     if "-" in str(pid) and len(str(pid)) > 10:
-        win_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"term": {"data.win.eventdata.processGuid": str(pid)}},
-                        {"term": {"data.ids.ProcessGuid": str(pid)}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
+        win_conditions.append({"term": {"data.win.eventdata.processGuid": str(pid)}})
     else:
-        win_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"term": {"data.win.eventdata.processId": str(pid)}},
-                        {"term": {"data.ids.ProcessId": str(pid)}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
+        win_conditions.append({"term": {"data.win.eventdata.processId": str(pid)}})
 
-    # Linux 查询条件 (Auditd)
-    # 查找 data.audit.pid 等于 pid 的记录
     linux_conditions = [
         {"exists": {"field": "data.audit.pid"}},
         {"term": {"data.audit.pid": str(pid)}},
-        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤，提高准确性
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},
     ]
 
-    # 组合 Windows 或 Linux 条件
     must_conditions.append(
         {
             "bool": {
@@ -413,73 +321,41 @@ def search_parent_process(agent_id, pid, timestamp_limit=None):
     payload = {
         "size": 1,
         "query": {"bool": {"must": must_conditions}},
-        "sort": [{"timestamp": {"order": "desc"}}],  # 找离当前时间最近的一次创建
+        "sort": [{"timestamp": {"order": "desc"}}],
     }
 
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
-        # return hits[0]["_source"] if hits else None
         return simplify_log(hits[0]["_source"]) if hits else None
     except Exception as e:
-        print(f"Error searching process: {e}")
+        logger.error(f"Error searching parent process: {e}")
         return None
 
 
-def search_child_processes(agent_id, ppid, timestamp_start=None):
-    """
-    查询特定 PPID (Parent Process ID) 启动的所有子进程
-    timestamp_start: 如果存在，则只查找在此时间之后的子进程
-    """
-    # 基础条件
+def search_child_processes(agent_id, ppid, start_time=None, end_time=None):
     must_conditions = [{"term": {"agent.id": agent_id}}]
 
-    # Windows 查询条件 (Sysmon EventID 1 或 IDS EventID 1)
-    win_conditions = [
-        {
-            "bool": {
-                "should": [
-                    {"terms": {"data.win.system.eventID": ["1"]}},
-                    {"terms": {"data.ids.EventID": ["1"]}},
-                ],
-                "minimum_should_match": 1,
-            }
-        },
-    ]
-    if "-" in str(ppid) and len(str(ppid)) > 10:
-        win_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}},
-                        {"term": {"data.ids.ParentProcessGuid": str(ppid)}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
-    else:
-        win_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"term": {"data.win.eventdata.parentProcessId": str(ppid)}},
-                        {"term": {"data.ids.ParentProcessId": str(ppid)}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
+    time_range = {}
+    if start_time:
+        time_range["gte"] = _format_iso8601(start_time)
+    if end_time:
+        time_range["lte"] = _format_iso8601(end_time)
+    if time_range:
+        must_conditions.append({"range": {"timestamp": time_range}})
 
-    # Linux 查询条件 (Auditd)
-    # 查找 data.audit.ppid 等于 ppid 的记录
+    win_conditions = [{"terms": {"data.win.system.eventID": ["1"]}}]
+    if "-" in str(ppid) and len(str(ppid)) > 10:
+        win_conditions.append({"term": {"data.win.eventdata.parentProcessGuid": str(ppid)}})
+    else:
+        win_conditions.append({"term": {"data.win.eventdata.parentProcessId": str(ppid)}})
+
     linux_conditions = [
         {"exists": {"field": "data.audit.ppid"}},
         {"term": {"data.audit.ppid": str(ppid)}},
-        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},  # 增加类型过滤
+        {"terms": {"data.audit.type": ["SYSCALL", "EXECVE"]}},
     ]
 
-    # 组合 Windows 或 Linux 条件
     must_conditions.append(
         {
             "bool": {
@@ -492,30 +368,6 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
         }
     )
 
-    # 时间范围限制：子进程的创建时间必须晚于父进程
-    if timestamp_start:
-        ts_raw = str(timestamp_start).strip().strip("'\"")
-        ts_wazuh = ts_raw.replace("T", " ").replace("Z", "").replace("z", "").strip()
-        ts_wazuh = re.sub(r"\s*(?:[+-]\d{2}:?\d{2})\s*$", "", ts_wazuh).strip()
-
-        ts_iso = ts_raw
-        if "T" not in ts_iso and " " in ts_iso:
-            ts_iso = ts_iso.replace(" ", "T", 1)
-        if not re.search(r"(Z|z|[+-]\d{2}:?\d{2})$", ts_iso):
-            ts_iso = f"{ts_iso}Z"
-        must_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"range": {"data.ids.@timestamp": {"gte": ts_iso}}},
-                        {"range": {"data.win.eventdata.utcTime": {"gte": ts_wazuh}}},
-                        {"range": {"timestamp": {"gte": ts_iso}}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
-
     payload = {
         "size": 50,
         "query": {"bool": {"must": must_conditions}},
@@ -525,23 +377,132 @@ def search_child_processes(agent_id, ppid, timestamp_start=None):
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
-        # return [hit["_source"] for hit in hits]
-        return [simplify_log(hit["_source"]) for hit in hits]
+        return [simplify_log(hit["_source"]) for hit in hits] if hits else []
     except Exception as e:
-        print(f"Error searching child processes: {e}")
+        logger.error(f"Error searching child processes: {e}")
+        return []
+
+
+def search_process_activities(
+    agent_id: str,
+    query_type: str,
+    query_value: str,
+    event_ids: list[str],
+    start_time: str = None,
+    end_time: str = None,
+):
+    must_conditions = [{"term": {"agent.id": agent_id}}]
+
+    # 时间过滤
+    time_range = {}
+    if start_time:
+        time_range["gte"] = _format_iso8601(start_time)
+    if end_time:
+        time_range["lte"] = _format_iso8601(end_time)
+    if time_range:
+        must_conditions.append({"range": {"timestamp": time_range}})
+
+    # EventID 过滤
+    if event_ids:
+        str_event_ids = [str(eid).strip() for eid in event_ids]
+        must_conditions.append({"terms": {"data.win.system.eventID": str_event_ids}})
+
+    val_str = str(query_value).strip()
+    type_conditions = []
+
+    # 3. 动态字段映射逻辑
+    if query_type == QueryType.PROCESS_ID:
+        type_conditions = [
+            {"term": {"data.win.eventdata.processId": val_str}},
+            {"term": {"data.win.eventdata.sourceProcessId": val_str}},
+            {"term": {"data.win.eventdata.targetProcessId": val_str}},
+        ]
+
+    elif query_type == QueryType.FILE_PATH:
+        # 基于 query_string 实现模糊匹配
+        query_str = f"*{val_str}*"
+        type_conditions = [
+            {
+                "query_string": {
+                    "query": query_str,
+                    "fields": [
+                        "data.win.eventdata.image",
+                        "data.win.eventdata.imageLoaded",
+                        "data.win.eventdata.sourceImage",
+                        "data.win.eventdata.targetImage",
+                        "data.win.eventdata.targetFilename",
+                        "data.win.eventdata.imagePath",
+                    ],
+                }
+            }
+        ]
+
+    elif query_type == QueryType.IP_ADDRESS:
+        type_conditions = [
+            {"term": {"data.win.eventdata.sourceIp": val_str}},
+            {"term": {"data.win.eventdata.destinationIp": val_str}},
+        ]
+
+    elif query_type == QueryType.PORT:
+        type_conditions = [
+            {"term": {"data.win.eventdata.sourcePort": val_str}},
+            {"term": {"data.win.eventdata.destinationPort": val_str}},
+        ]
+
+    elif query_type == QueryType.SERVICE_NAME:
+        # 基于 query_string 实现模糊匹配
+        query_str = f"*{val_str}*"
+        type_conditions = [
+            {"query_string": {"query": query_str, "fields": ["data.win.eventdata.serviceName"]}}
+        ]
+
+    elif query_type == QueryType.USER_ACCOUNT:
+        # 基于 query_string 实现模糊匹配段
+        query_str = f"*{val_str}*"
+        type_conditions = [
+            {
+                "query_string": {
+                    "query": query_str,
+                    "fields": [
+                        "data.win.eventdata.user",
+                        "data.win.eventdata.sourceUser",
+                        "data.win.eventdata.targetUser",
+                        "data.win.eventdata.accountName",
+                    ],
+                }
+            }
+        ]
+
+    # 将 OR (should) 逻辑挂载到主查询中
+    if type_conditions:
+        must_conditions.append({"bool": {"should": type_conditions, "minimum_should_match": 1}})
+
+    payload = {
+        "size": 20,
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "desc"}}],
+    }
+
+    try:
+        response = agent_archives(agent_id, payload=payload)
+        hits = response.get("hits", {}).get("hits", [])
+        return [simplify_log(hit["_source"]) for hit in hits] if hits else []
+    except Exception as e:
+        logger.error(f"Error searching lateral activities: {e}")
         return []
 
 
 @tool
-def get_parent_process_log(agent_id: str, pid: str, timestamp_limit: str = None):
+def get_parent_process_log(agent_id: str, pid: str, start_time: str = None, end_time: str = None):
     """
     基于 ProcessGuid (Windows 优先) 或 PID (Linux/Windows 备用) 查询给定进程的事件创建日志。
 
     :param agent_id: Agent 的唯一 ID (例如: "005")
     :param pid: 进程的 PID(例如: "1234") 或 ProcessGuid(例如: "{70e31e6c-29a2-69ae-9102-000000000800}")
-    :param timestamp_limit: (可选) 如果提供，则只查找在此时间之前的创建事件。此参数需严格遵循 ISO8601 格式，例如：2026-03-17T12:00:00Z。
+    :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
+    :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
-    result = search_parent_process(agent_id, pid, timestamp_limit)
+    result = search_parent_process(agent_id, pid, start_time, end_time)
 
     if result:
         return json.dumps(result, ensure_ascii=False, indent=2)
@@ -552,16 +513,17 @@ def get_parent_process_log(agent_id: str, pid: str, timestamp_limit: str = None)
 
 
 @tool
-def get_child_processes_logs(agent_id: str, pid: str, timestamp_start: str = None):
+def get_child_processes_logs(agent_id: str, pid: str, start_time: str = None, end_time: str = None):
     """
     基于 ProcessGuid (Windows 优先) 或 PID (Linux/Windows 备用) 查询给定进程直接派生（创建）的所有子进程日志。
     不进行递归，只获取直属的子进程创建事件。
 
     :param agent_id: Agent 的唯一 ID (例如: "005")
-    :param pid: 父进程的 PID(例如: "1234") 或 ProcessGuid(例如: "{70e31e6c...}")
-    :param timestamp_start: (可选) 如果提供，则只查找在此时间之后的子进程创建事件。此参数需严格遵循 ISO8601 格式，例如：2026-03-17T12:00:00Z。
+    :param pid: 父进程的 PID 或 ProcessGuid
+    :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
+    :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
-    results = search_child_processes(agent_id, pid, timestamp_start)
+    results = search_child_processes(agent_id, pid, start_time, end_time)
 
     if results:
         return json.dumps(results, ensure_ascii=False, indent=2)
@@ -573,154 +535,55 @@ def get_child_processes_logs(agent_id: str, pid: str, timestamp_start: str = Non
         )
 
 
-def search_process_activities(
-    agent_id: str, pid: str, event_ids: list[str], time_anchor: str = None
-):
-    """
-    查询特定进程的特定横向交互与敏感行为
-    """
-    # 基础条件
-    must_conditions = [{"term": {"agent.id": agent_id}}]
-
-    # 动态传入 event_ids
-    if event_ids:
-        str_event_ids = [str(eid).strip() for eid in event_ids]
-        must_conditions.append(
-            {
-                "bool": {
-                    "should": [
-                        {"terms": {"data.ids.EventID": str_event_ids}},
-                        {"terms": {"data.win.system.eventID": str_event_ids}},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            }
-        )
-
-    # 匹配 PID，涵盖源(Source)、目标(Target)和自身(Process)
-    pid_str = str(pid).strip()
-    if "-" in pid_str and len(pid_str) > 10:
-        pid_conditions = [
-            {"term": {"data.ids.ProcessGuid": pid_str}},
-            {"term": {"data.ids.SourceProcessGuid": pid_str}},
-            {"term": {"data.ids.TargetProcessGuid": pid_str}},
-            {"term": {"data.win.eventdata.processGuid": pid_str}},
-            {"term": {"data.win.eventdata.sourceProcessGuid": pid_str}},
-            {"term": {"data.win.eventdata.targetProcessGuid": pid_str}},
-        ]
-    else:
-        pid_conditions = [
-            {"term": {"data.ids.ProcessId": pid_str}},
-            {"term": {"data.ids.SourceProcessId": pid_str}},
-            {"term": {"data.ids.TargetProcessId": pid_str}},
-            {"term": {"data.win.eventdata.processId": pid_str}},
-            {"term": {"data.win.eventdata.sourceProcessId": pid_str}},
-            {"term": {"data.win.eventdata.targetProcessId": pid_str}},
-        ]
-
-    must_conditions.append({"bool": {"should": pid_conditions, "minimum_should_match": 1}})
-
-    # 时间范围限制
-    if time_anchor:
-        try:
-            # 清理时间字符串格式
-            ts_clean = str(time_anchor).strip().replace("Z", "")
-            if "." in ts_clean:
-                ts_clean = ts_clean.split(".")[0]  # 丢弃毫秒
-
-            # 解析为 datetime 对象 (兼容带有 'T' 或空格的格式)
-            if "T" in ts_clean:
-                dt_obj = datetime.datetime.strptime(ts_clean, "%Y-%m-%dT%H:%M:%S")
-            else:
-                dt_obj = datetime.datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
-
-            # 计算时间窗口边界
-            time_min = dt_obj - datetime.timedelta(minutes=60)
-            time_max = dt_obj + datetime.timedelta(minutes=60)
-
-            # 格式化为 Wazuh UtcTime 格式 (空格分隔)
-            wazuh_min = time_min.strftime("%Y-%m-%d %H:%M:%S")
-            wazuh_max = time_max.strftime("%Y-%m-%d %H:%M:%S")
-
-            # 格式化为 ISO 格式 (T 分隔，供 timestamp 字段使用)
-            iso_min = time_min.strftime("%Y-%m-%dT%H:%M:%S")
-            iso_max = time_max.strftime("%Y-%m-%dT%H:%M:%S")
-
-            # 兼容三种时间字段的范围匹配
-            must_conditions.append(
-                {
-                    "bool": {
-                        "should": [
-                            {
-                                "range": {
-                                    "data.win.eventdata.utcTime": {
-                                        "gte": wazuh_min,
-                                        "lte": wazuh_max,
-                                    }
-                                }
-                            },
-                            {
-                                "range": {
-                                    "data.ids.@timestamp": {
-                                        "gte": f"{iso_min}Z",
-                                        "lte": f"{iso_max}Z",
-                                    }
-                                }
-                            },
-                            {"range": {"timestamp": {"gte": f"{iso_min}Z", "lte": f"{iso_max}Z"}}},
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                }
-            )
-        except Exception as e:
-            print(f"Time parsing error for anchor {time_anchor}: {e}")
-            pass
-
-    payload = {
-        "size": 50,
-        "query": {"bool": {"must": must_conditions}},
-        "sort": [{"timestamp": {"order": "desc"}}],
-    }
-
-    try:
-        response = agent_archives(agent_id, payload=payload)
-        hits = response.get("hits", {}).get("hits", [])
-        if not hits:
-            return "0 logs found in the database."
-        return [simplify_log(hit["_source"]) for hit in hits]
-    except Exception as e:
-        print(f"Error searching lateral activities: {e}")
-        return []
-
-
 @tool
 def get_process_activity_logs(
-    agent_id: str, pid: str, event_ids: list[str], timestamp_anchor: str = None
+    agent_id: str,
+    query_type: str,
+    query_value: str,
+    event_ids: list[str],
+    start_time: str = None,
+    end_time: str = None,
 ):
     """
-    获取特定进程的高危横向行为日志。当进程树断裂或需要分析进程具体行为时使用。
+    获取多维度的高危行为日志。当父子进程关联失效，或需要通过特定特征（如 IP、文件名、服务名、账号）横向追踪攻击痕迹时使用。
 
     :param agent_id: Agent 的唯一 ID
-    :param pid: 必须传入纯数字的 PID (如 "6536")，切勿传入 ProcessGuid。
-    :param event_ids: 【必填】一个包含目标 EventID 的字符串列表。你必须根据溯源意图精准选择：
-                      - ["3", "5156"]: 查询网络连接 (用于寻找 C2 通信或横向移动)
-                      - ["7"]: 查询模块加载/DLL (用于发现 DLL 注入或可疑库加载)
-                      - ["8"]: 查询远程线程创建 (CreateRemoteThread，用于发现进程注入的源头)
-                      - ["10"]: 查询跨进程访问 (ProcessAccess，用于发现凭据窃取)
-                      - ["11"]: 查询文件创建 (用于发现恶意 Payload 落地)
-                      一次只选择一类，提高查询精度
-    :param timestamp_anchor: (可选) ISO8601 格式的时间锚点。
+    :param query_type: 【必填】指示查询指标的枚举类型。一次调用只能使用以下一种类型：
+        - "PROCESS_ID"   : 按进程 ID 追踪。
+        - "FILE_PATH"    : 按文件路径或文件名追踪。
+        - "IP_ADDRESS"   : 按源或目的 IP 地址追踪。
+        - "PORT"         : 按源或目的网络端口追踪。
+        - "SERVICE_NAME" : 按注册的系统服务名称追踪。
+        - "USER_ACCOUNT" : 按操作系统用户或服务账号追踪。
+    :param query_value: 【必填】与 query_type 对应的具体数值。样例说明：
+        - 若为 PROCESS_ID: 传入pid "6536"
+        - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\"
+        - 若为 IP_ADDRESS: 传入 "192.168.1.50"
+        - 若为 PORT: 传入 "2024"
+        - 若为 SERVICE_NAME: 传入"WMI"
+        - 若为 USER_ACCOUNT: 传入 "LocalSystem", "Administrator"
+    :param event_ids: 【必填】目标 EventID 列表。请严格根据调查意图选择对应的类别：
+        - ["3"]         : 网络连接行为 (Network Connections) - 用于检测 C2 通信、SMB 横向移动连接。
+        - ["7"]         : DLL/模块加载行为 (Image Loaded) - 用于检测恶意的 DLL 劫持或加载可疑模块。
+        - ["8", "10"]   : 进程注入与内存访问 (Process Injection/Access) - 用于检测远程线程注入、进程镂空等高级规避动作。
+        - ["11"]        : 文件创建与释放行为 (File Created) - 用于检测进程是否在磁盘上落地了木马、WebShell 或临时执行文件。
+        - ["7045"]      : 系统服务创建行为 (Service Installed) - 用于检测横向移动、权限提升或持久化木马注册后台服务。
+    :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
+    :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
     if not event_ids:
         return json.dumps({"error": "You MUST provide a list of event_ids to search for."})
 
-    results = search_process_activities(agent_id, pid, event_ids, timestamp_anchor)
+    results = search_process_activities(
+        agent_id, query_type, query_value, event_ids, start_time, end_time
+    )
     if results:
         return json.dumps(results, ensure_ascii=False, indent=2)
     else:
         return json.dumps(
-            {"error": f"No activity logs found for PID {pid} with event IDs {event_ids}."}
+            {
+                "error": f"No logs found for {query_type}={query_value} with event IDs {event_ids} within the specified time."
+            }
         )
 
 
@@ -780,7 +643,7 @@ if __name__ == "__main__":
 
     # messages = chunk["messages"]
 
-    # print("\n--- Q3: 获取普通日志 ---")
+    # print("\n--- Q3: 关键词搜索日志 ---")
     # messages = [{"role": "user", "content": "获取agent 005 最近一条包含 'pypayload' 的日志"}]
     # for chunk in indexer_agent.stream(
     #     {"messages": messages},
@@ -794,8 +657,13 @@ if __name__ == "__main__":
 
     # messages = chunk["messages"]
 
-    # print("\n--- Q4: 获取父进程 ---")
-    # messages = [{"role": "user", "content": "获取agent 005 进程为8912的创建日志"}]
+    # print("\n--- Q4: 获取父进程日志 ---")
+    # messages = [
+    #     {
+    #         "role": "user",
+    #         "content": "获取agent 005 进程guid为	{70e31e6c-4560-69c3-8c1b-000000000800}的创建日志",
+    #     }
+    # ]
     # for chunk in indexer_agent.stream(
     #     {"messages": messages},
     #     stream_mode="values",
@@ -808,9 +676,14 @@ if __name__ == "__main__":
 
     # messages = chunk["messages"]
 
-    # print("\n--- Q5 获取子进程 ---")
-    # # messages = [{"role": "user", "content": "获取agent 005 进程为8912的子进程的进程id"}]
-    # messages = [{"role": "user", "content": "查找agent 005上ProcessGuid为{70e31e6c-dd80-69b2-f50a-000000000800}的直接子进程。应用timestamp_start '2026-03-12 15:36:32.642'。"}]
+    # print("\n--- Q5 获取子进程日志 ---")
+    # # messages = [{"role": "user", "content": "获取agent 005 进程为13112的子进程的进程id"}]
+    # messages = [
+    #     {
+    #         "role": "user",
+    #         "content": "查找agent 005上ProcessGuid为{70e31e6c-4560-69c3-8b1b-000000000800}的直接子进程。",
+    #     }
+    # ]
     # for chunk in indexer_agent.stream(
     #     {"messages": messages},
     #     stream_mode="values",
@@ -821,12 +694,11 @@ if __name__ == "__main__":
     #     elif latest_message.tool_calls:
     #         print(f"Calling tools: {[tc['name'] for tc in latest_message.tool_calls]}")
 
-    print("\n--- Q6 查询进程的横向活动 ---")
-    # messages = [{"role": "user", "content": "查找agent 005上pid为3732的网络连接活动。应用timestamp_anchor '2020-07-22T04:05:03.447Z'。"}]
+    print("\n--- Q6 查询其他活动日志 ---")
     messages = [
         {
             "role": "user",
-            "content": "获取进程guid为{b59756a9-baa8-5f17-7807-000000000400}在Agent 005上的进程创建日志。返回完整的原始JSON数据。",
+            "content": "调查agent005的网络连接行为，使用query_type='USER_ACCOUNT, query_value='defin',选取EventID 为3。应用时间范围：start_time '2026-03-25T18:41:02+08:00' 和 end_time '2026-03-25T18:45:02+08:00 ",
         }
     ]
     for chunk in indexer_agent.stream(
