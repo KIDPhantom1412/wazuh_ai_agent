@@ -2,7 +2,7 @@ import pytest
 from langchain.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from agents.attribution_agent import get_attribution_agent
+from agents.attribution.attribution_agent import get_attribution_agent
 from core.config import settings
 
 

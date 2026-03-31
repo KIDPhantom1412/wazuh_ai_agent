@@ -1,6 +1,6 @@
 from langchain_openai import ChatOpenAI
 
-from agents.attribution_agent import get_attribution_agent
+from agents.attribution.attribution_agent import get_attribution_agent
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
 from agents.response_agent import get_response_agent

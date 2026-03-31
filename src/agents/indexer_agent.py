@@ -76,7 +76,7 @@ You are exclusively a raw data retrieval pipeline for the Attribution Agent. You
 @tool
 def get_count_agent_alerts(agent_id, starttime, endtime):
     """
-    从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 在指定时间段内的告警日志总数。
+    从 Wazuh Indexer 的 wazuh-alerts-* 获取特定 Agent 在指定时间段内的告警日志总数。当用户没有具体说明时区时，默认是北京时间，注意相关字段的时间转换。当用户提问过去/最近一段时间的告警日志总数时，endtime默认为"now"。
 
     :param agent_id: Agent 的唯一 ID (如 "001")。
     :param starttime: 查询的起始时间。支持相对时间 (如 "now-24h") 或绝对时间 (ISO8601 格式)。

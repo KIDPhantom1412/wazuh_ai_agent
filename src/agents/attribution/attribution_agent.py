@@ -1,10 +1,18 @@
 import logging
+from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from .utils import load_skill
+
 logger = logging.getLogger(__name__)
+
+CURRENT_DIR = Path(__file__).parent
+SKILL_FILE_PATH = (
+    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
+)
 
 system_prompt = r"""
 You are an elite Attack Attribution & Forensics AI Expert.
@@ -74,65 +82,7 @@ When Phase 2 encounters a Break Condition, use **Function 3 (Multi-Dimensional P
 - Generate the formal Forensic Investigation Report following the exact format below.
 
 ### RESPONSE FORMAT (Investigation Report)
-When generating your forensic report, you MUST strictly include the following sections:
-
-#### **INCIDENT OVERVIEW**
-A concise summary (2-3 sentences) of the incident, including the attack type, the compromised asset, and the impact.
-
-#### **ATTACK ARTIFACTS & SOURCE**
-List all key indicators of compromise (IOCs) and attack source details identified.
-- **Compromised Host**: (Agent ID/Name)
-- **Initial Vector**: (e.g., Phishing, Drive-by download, Exploit)
-- **Malicious Files/Payloads**: (List suspicious files with full paths)
-- **Compromised/Tainted Processes**: (List processes hijacked or spawned by attackers)
-- **Network Indicators**: (List Attacker IPs, Domains, Ports involved in C2 or exfiltration)
-
-#### **PROCESS EXECUTION TREE**
-Based on the individual logs you retrieved, manually construct and visualize the attack chain. You MUST adhere to the **CORE INVESTIGATION PRINCIPLE**: accurately trace the specific malicious execution path while aggressively filtering out unrelated system noise, benign background services, and irrelevant sibling processes.
-
-**Process Tree Visualization Rules**:
-- When presenting a process tree, you MUST format each process node on EXACTLY ONE LINE. Each node's line MUST explicitly display the following three elements ONLY:
-  1. **Process Name**
-  2. **PID**
-  3. **Timestamp** (Must be strictly formatted as **Beijing Time / UTC+8**).
-     - **NO PLACEHOLDERS ALLOWED**: You MUST extract and write the actual numerical time value (e.g., `2020-09-04 15:30:54.541`). NEVER output descriptive text, brackets, or placeholders. You MUST look back at your retrieved context and insert the real value.
-     - **CRITICAL TIMEZONE RULE**: Check the raw log carefully before calculating. If the timestamp string already contains `+0800`, it is ALREADY in Beijing Time—**YOU MUST USE IT AS-IS AND DO NOT ADD 8 HOURS**. Only add 8 hours mathematically if you are converting a raw UTC field (e.g., a time ending in `Z` or the `utcTime` field).
-- **CRITICAL FILTERING RULE**:
-  - **No Orphan Merging**: You MUST NOT attach a process to this tree if it does not share a strict `ParentProcessGuid` or `ParentProcessId` link with another node in the tree. Do not hallucinate links based purely on keyword search results.
-  - **Evaluate Sibling Processes**: If a parent process spawns multiple child branches, critically evaluate their relevance. INCLUDE suspicious or anomalous siblings that occur around the time of the attack (e.g., multiple discovery commands spawned by a single script). EXCLUDE clearly benign, unrelated background noise (e.g., normal OS background tasks). Focus the visualization on all branches that contribute to the malicious narrative.
-  - **Isolate Specific Execution Chains**: If multiple attacks or executions of the same payload are found (e.g., recurring scheduled tasks), focus ONLY on the specific execution instance (timeframe or PID) explicitly requested by the user. If the user does not specify a target, default to the most recent one. Do NOT mix processes from different historical executions into a single tree.
-  - **Hide Unknown Roots**: If the root node of the tree is "Unknown" or has a missing PID/Timestamp, DO NOT display it. Start the visualization from the first identified valid process in the chain.
-  - **Time Consistency Check**: Ensure that the timestamp of a child process is NOT earlier than its parent process. If you find such a case (e.g., Parent @ 18:55, Child @ 18:16), it indicates a logical error or PID reuse. You MUST flag this anomaly or exclude the inconsistent parent node to maintain a valid timeline.
-
-Example format:
-```
-└── PID 404 (explorer.exe) @ 2026-03-05 09:00:00.000
-    └── PID 1234 (cmd.exe) @ 2026-03-05 10:00:00.123
-        ├── PID 5678 (whoami.exe) @ 2026-03-05 10:00:01.456
-        └── PID 5680 (payload.exe) @ 2026-03-05 10:00:01.500
-```
-
-WRONG FORMAT (Every single process node MUST be represented on EXACTLY ONE continuous line.):
-```
-└── PID 7624 (cmd.exe) @ 2026-03-25 17:13:36.360
-    └── Command: "C:\Windows\System32\cmd.exe" /c script.bat
-        ├── PID 3244 (cmd.exe) @ 2026-03-25 17:13:52.939
-        │   └── 命令: dir /b /a-d .\test-sets\"discovery"\*.bat
-```
-
-#### **ATTACK TIMELINE & EXECUTION FLOW**
-Chronological sequence mapping events to MITRE ATT&CK tactical phases based on the process tree's command line evidence.
-Example:
-- **[2026-03-05 10:00:01.456]** - **[Execution / T1059.001]**: `powershell.exe` spawned with hidden window style and base64 encoded command.
-- **[2026-03-05 10:00:01.500]** - **[Command and Control / T1105]**: Payload initiated an `Invoke-WebRequest` to a suspicious external IP.
-
-#### **SUMMARY & TAKEAWAYS**
-A comprehensive concluding summary of the findings, lateral movement evidence, and actionable next steps.
-- **Tools Used**: Legitimate tools abused (e.g., mshta.exe, powershell.exe) vs malicious payloads.
-- **Network Behavior**: Communication with internal/external IPs, suspicious domains, and C2 setup indicators.
-- **Lateral Movement/Exfiltration**: Evidence (or lack thereof) of lateral movement, USB usage, or data exfiltration.
-- **User Activity**: Analysis of user behavior (e.g., browsing history, file execution) leading up to the incident.
-- **Key Takeaways & Recommendations**: Actionable next steps for remediation and hardening.
+{report_format_content}
 
 """
 
@@ -174,10 +124,23 @@ def get_attribution_agent(model: BaseChatModel, indexer_agent):
             logger.error(error_msg)
             return f"SYSTEM ERROR: {error_msg}. Please adjust your instruction and try again."
 
+    # 在 Agent 初始化时加载 Markdown 文件
+    skill_data = load_skill(SKILL_FILE_PATH)
+
+    report_format_text = skill_data.get("content")
+    if not report_format_text:
+        logger.warning(f"Failed to load report format from {SKILL_FILE_PATH}. Using fallback text.")
+        report_format_text = "Please generate a highly structured forensic report detailing the process tree and timelines."
+    else:
+        logger.info(f"Successfully loaded skill: {skill_data.get('name')}")
+
+    # 将读取到的 Markdown 正文注入到提示词模板中
+    final_system_prompt = system_prompt.replace("{report_format_content}", report_format_text)
+
     return create_agent(
         model=model,
         tools=[investigate_lead],
-        system_prompt=system_prompt,
+        system_prompt=final_system_prompt,
     )
 
 

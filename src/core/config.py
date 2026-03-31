@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 384
     HF_ENDPOINT: str = "https://hf-mirror.com"
 
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_ENDPOINT: str | None = None
+    LANGSMITH_API_KEY: str | None = None
+    LANGSMITH_PROJECT: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
