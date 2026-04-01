@@ -84,7 +84,7 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     return result
 
 
-def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=600):
+def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None):
     logger.info("Getting archives information")
 
     url = f"https://{host}:9200/wazuh-archives-*/_search"
@@ -112,8 +112,17 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=600):
                     must_conditions.append({"query_string": {"query": f"*{clean_keyword}*"}})
                 else:
                     must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
+        
+        # 3. 追加时间范围过滤
+        time_range = {}
+        if start_time:
+            time_range["gte"] = start_time
+        if end_time:
+            time_range["lte"] = end_time
+        if time_range:
+            must_conditions.append({"range": {"timestamp": time_range}})
 
-        # 3. 构建完整的 DSL Payload
+        # 4. 构建完整的 DSL Payload
         payload = {
             "size": x_limit,
             "query": {"bool": {"must": must_conditions}},

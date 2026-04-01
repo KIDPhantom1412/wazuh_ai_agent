@@ -109,18 +109,50 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
     return json.dumps(alerts)
 
 
+# @tool
+# def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
+#     """
+#     从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的日志，支持关键词搜索。
+
+#     :param agent_id: Agent 的唯一 ID (如 "001")
+#     :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
+#     :param x_limit: 返回的日志条数, 默认为 10
+#     """
+#     search_results = agent_archives(
+#         agent_id, keyword=keyword, x_limit=x_limit, payload=None, timeout=30
+#     )
+#     hits = search_results.get("hits", {}).get("hits", [])
+#     archives = [simplify_log(hit["_source"]) for hit in hits]
+
+#     return json.dumps(archives, ensure_ascii=False)
+
 @tool
-def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
+def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10, start_time: str = None, end_time: str = None):
     """
-    从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的日志，支持关键词搜索。
+    从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的原始归档日志，支持关键词搜索和时间过滤。
 
     :param agent_id: Agent 的唯一 ID (如 "001")
-    :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
-    :param x_limit: 返回的日志条数, 默认为 10
+    :param keyword: 搜搜索的关键词 (如 "regsvr32"), 默认为""
+    :param x_limit: 返回的日志条数, 默认为 10。
+    :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
+    :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
+
+    if start_time:
+        start_time = _format_iso8601(start_time)
+    if end_time:
+        end_time = _format_iso8601(end_time)
+
     search_results = agent_archives(
-        agent_id, keyword=keyword, x_limit=x_limit, payload=None, timeout=300
+        agent_id, 
+        keyword=keyword, 
+        x_limit=x_limit, 
+        payload=None, 
+        timeout=30,
+        start_time=start_time,
+        end_time=end_time
     )
+    
     hits = search_results.get("hits", {}).get("hits", [])
     archives = [simplify_log(hit["_source"]) for hit in hits]
 
