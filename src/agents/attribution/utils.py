@@ -56,18 +56,18 @@ def load_mitre(filepath: str | Path, technique_id: str) -> str:
         return ""
 
     tid = technique_id.strip().upper()
-    
+
     capturing = False
     captured_text = []
 
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith("## T"):
                     heading_id = line[3:].strip().split()[0]
-                    
+
                     # if heading_id == tid or heading_id.startswith(f"{tid}."):
-                    if heading_id == tid :
+                    if heading_id == tid:
                         capturing = True
                         captured_text.append(line)
                     else:
@@ -75,18 +75,25 @@ def load_mitre(filepath: str | Path, technique_id: str) -> str:
                             break
                 elif capturing:
                     captured_text.append(line)
-                    
+
         return "".join(captured_text).strip()
 
     except Exception as e:
         logger.error(f"Failed to read MITRE KB {path}: {e}")
         return ""
 
+
 if __name__ == "__main__":
     from pathlib import Path
 
     CURRENT_DIR = Path(__file__).parent
-    MITRE_KB_FILE_PATH = (CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "mitre_knowledgebase.md")
+    MITRE_KB_FILE_PATH = (
+        CURRENT_DIR.parent.parent
+        / "documents"
+        / "skill"
+        / "attribution_skills"
+        / "mitre_knowledgebase.md"
+    )
     technique_id = "T1001"
     external_knowldege = load_mitre(MITRE_KB_FILE_PATH, technique_id)
     print(external_knowldege)

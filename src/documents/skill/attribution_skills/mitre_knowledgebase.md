@@ -40,7 +40,7 @@
 
 Adversaries may impersonate a fake SSL/TLS handshake to make it look like subsequent traffic is SSL/TLS encrypted, potentially interfering with some security tooling, or to make the traffic look like it is related with a trusted entity.
 
-Adversaries may also leverage legitimate protocols to impersonate expected web traffic or trusted services. For example, adversaries may manipulate HTTP headers, URI endpoints, SSL certificates, and transmitted data to disguise C2 communications or mimic legitimate services such as Gmail, Google Drive, and Yahoo Messenger.(Citation: ESET Okrum July 2019)(Citation: Malleable-C2-U42)
+Adversaries may also leverage legitimate protocols tT1o impersonate expected web traffic or trusted services. For example, adversaries may manipulate HTTP headers, URI endpoints, SSL certificates, and transmitted data to disguise C2 communications or mimic legitimate services such as Gmail, Google Drive, and Yahoo Messenger.(Citation: ESET Okrum July 2019)(Citation: Malleable-C2-U42)
 
 ### Investigation & Hunting Guidelines
 
@@ -468,7 +468,7 @@ Adversaries may use the results and responses from these requests to determine i
 
 Adversaries may collect various types of information about Wi-Fi networks from hosts. For example, on Windows names and passwords of all Wi-Fi networks a device has previously connected to may be available through `netsh wlan show profiles` to enumerate Wi-Fi names and then `netsh wlan show profile “Wi-Fi name” key=clear` to show a Wi-Fi network’s corresponding password.(Citation: BleepingComputer Agent Tesla steal wifi passwords)(Citation: Malware Bytes New AgentTesla variant steals WiFi credentials)(Citation: Check Point APT35 CharmPower January 2022) Additionally, names and other details of locally reachable Wi-Fi networks can be discovered using calls to `wlanAPI.dll` [Native API](https://attack.mitre.org/techniques/T1106) functions.(Citation: Binary Defense Emotes Wi-Fi Spreader)
 
-On Linux, names and passwords of all Wi-Fi-networks a device has previously connected to may be available in files under  ` /etc/NetworkManager/system-connections/`.(Citation: Wi-Fi Password of All Connected Networks in Windows/Linux) On macOS, the password of a known Wi-Fi may be identified with  ` security find-generic-password -wa wifiname` (requires admin username/password).(Citation: Find Wi-Fi Password on Mac)
+On Linux, names and passwords of all Wi-Fi-networks a device has previously connected to may be available in files under     ` /etc/NetworkManager/system-connections/`.(Citation: Wi-Fi Password of All Connected Networks in Windows/Linux) On macOS, the password of a known Wi-Fi may be identified with     ` security find-generic-password -wa wifiname` (requires admin username/password).(Citation: Find Wi-Fi Password on Mac)
 
 ### Investigation & Hunting Guidelines
 
@@ -1851,14 +1851,15 @@ More sophisticated samples may perform multiple process injections to segment mo
 ### Investigation & Hunting Guidelines
 
 1. **General Detection Strategy**: Monitor relevant process telemetry, command-line arguments, and API calls associated with this behavior.
-2. **Disambiguate Process Access from Injection (Parent PID Spoofing)**: A "Process Accessed" log  does not inherently confirm memory injection. Attackers frequently access highly stable OS processes strictly to read their PIDs for Parent PID Spoofing. 
-   * **Action**: Always cross-reference access events with the attacker's command line. If the command line arguments specify a target executable that differs from the accessed "Parent", the accessed process is merely a disguise. Pivot immediately to hunt for the true target executable.
+2. **Disambiguate Process Access from Injection (Parent PID Spoofing)**: A "Process Accessed" log  does not inherently confirm memory injection. Attackers frequently access highly stable OS processes strictly to read their PIDs for Parent PID Spoofing.
+   - **Action**: Always cross-reference access events with the attacker's command line. If the command line arguments specify a target executable that differs from the accessed "Parent", the accessed process is merely a disguise. Pivot immediately to hunt for the true target executable.
 3. **Recognize Native Dynamic Compilation (Exclude T1059 False Positives)**: Scripting engines compile code on-the-fly. If an interpreter spawns and accesses a known system compiler, this is typical Dynamic Execution (T1059).
-   * **Action**: Do NOT classify the access of a system compiler as Process Injection (T1055). Treat the compiler and its ephemeral output files (`.dll`, `.cs`) as native script machinery, not as injection victims.
+   - **Action**: Do NOT classify the access of a system compiler as Process Injection (T1055). Treat the compiler and its ephemeral output files (`.dll`, `.cs`) as native script machinery, not as injection victims.
 4. **Filter Interpreter Environmental Noise (Exclude T1105 False Positives)**: When hunting for staged payloads associated with injection, interpreters often drop temporary files in `Temp` or `AppData` to evaluate execution policies upon startup.
-   * **Action**: Evaluate the naming conventions of dropped files. Exclude systemic policy test files from your intelligence facts to avoid false positive Tool Transfer (T1105) classifications.
-5. **Differentiate Legitimate Child Process Access**: When a parent process spawns a new child process, the Windows OS inherently grants the parent a handle with full access to that child. 
-   * **Action**: If you observe a "Process Accessed" log where the Source is the direct Parent of the Target, and the timestamps closely align with the Target's creation, treat this as standard OS lifecycle behavior, NOT an injection attack.
+   - **Action**: Evaluate the naming conventions of dropped files. Exclude systemic policy test files from your intelligence facts to avoid false positive Tool Transfer (T1105) classifications.
+5. **Differentiate Legitimate Child Process Access**: When a parent process spawns a new child process, the Windows OS inherently grants the parent a handle with full access to that child.
+   - **Action**: If you observe a "Process Accessed" log where the Source is the direct Parent of the Target, and the timestamps closely align with the Target's creation, treat this as standard OS lifecycle behavior, NOT an injection attack.
+
 ***
 
 ## T1055.001
@@ -2010,9 +2011,9 @@ This is very similar to [Thread Local Storage](https://attack.mitre.org/techniqu
 
 1. **General Detection Strategy**: Monitor relevant process telemetry, command-line arguments, and API calls associated with this behavior.
 2. **Relentlessly Track the Victim Process**: Process Hollowing relies on starting a legitimate OS executable in a suspended state to act as a container. Analysts often get distracted by intermediate staging activities (like file drops or discovery commands) and fail to confirm the final execution.
-   * **Action**: Explicitly extract the intended target/victim executable name from the attacker's initial command line or script parameters. The investigation is conceptually incomplete until the actual execution of this specific victim process is confirmed within the system telemetry.
-3. **Understand Payload Absence (Log Evasion)**: Because the malicious payload is injected directly into the memory of the hollowed victim process, the OS will NOT generate a standard Process Creation log (e.g., Sysmon Event ID 1) for the payload itself.
-   * **Action**: Do not assume the attack failed due to the absence of a creation log for the injected payload. The existence of the hollowed victim process, combined with anomalous cross-process memory access or modification, constitutes evidence of successful execution.
+   - **Action**: Explicitly extract the intended target/victim executable name from the attacker's initial command line or script parameters. The investigation is conceptually incomplete until the actual execution of this specific victim process is confirmed within the system telemetry.
+3. **Understand Payload Absence (Log Evasion)**: Because the malicious payload is injected directly into the memory of the hollowed victim process, the OS will NOT generate a standard Process Creation log  for the payload itself.
+   - **Action**: Do not assume the attack failed due to the absence of a creation log for the injected payload. The existence of the hollowed victim process, combined with anomalous cross-process memory access or modification, constitutes evidence of successful execution.
 
 ***
 
@@ -2212,6 +2213,16 @@ PowerShell commands/scripts can also be executed without directly invoking the <
 ### Investigation & Hunting Guidelines
 
 1. **General Detection Strategy**: Monitor relevant process telemetry, command-line arguments, and API calls associated with this behavior.
+2. **Differentiate Native Interpreter Initialization from Malicious Drops (Exclude T1105 False Positives)**:
+   - **Context**: When scripting interpreters (like PowerShell) initialize, the OS often forces them to generate temporary files in `AppData` or `Temp` directories to evaluate execution restrictions (such as AppLocker or Constrained Language Mode).
+   - **Action**: Do NOT blindly classify every `.ps1`, `.psm1`, or temporary script file drop by `powershell.exe` as Ingress Tool Transfer (T1105). You MUST evaluate the temporal context: if the file is dropped within milliseconds of the PowerShell process creation and has an ephemeral naming convention (e.g., randomized temp names testing policies), classify it as **Native Engine Initialization Noise**, regardless of SIEM alert severity. Only classify it as T1105 if the file content/name strongly correlates with an external payload downloaded via the command line.
+3. **Correlate Execution with Post-Exploitation Impact (Cross-Tactic Validation)**:
+   - **Context**: Benign administrative PowerShell scripts frequently manage system settings. However, malicious scripts often act as in-memory wrappers to execute payloads that target sensitive OS components, memory spaces, or security registries.
+   - **Action**: When `powershell.exe` acts as the source process for high-severity telemetry—such as unauthorized cross-process memory access to critical system services, anomalous dumping of security hives, or remote thread injection—do NOT evaluate these events in isolation. You MUST explicitly map the resulting impact to its respective MITRE tactic (e.g., T1003 for Credential Access, T1055 for Injection) and structurally link it back to the original PowerShell command line or script block (T1059.001) to expose the full attack chain.
+4. **Evaluate Network Anomalies via Proxy/VPN Context (Disambiguate C2/IPC)**:
+   - **Context**: Network-dependent commands (such as payload downloaders or C2 beacons) often trigger outbound network connections. However, if the host OS routes traffic through local proxies, VPN clients, or specific network interfaces, the raw telemetry may only reflect loopback connections (e.g., `127.0.0.1`) to non-standard high ports instead of the true external destination.
+   - **Action**: If you observe `powershell.exe` making loopback connections immediately preceding or during the execution of a script, do NOT default to classifying this as Inter-Process Communication (IPC) or internal lateral movement. You MUST evaluate the command-line intent: if an external URL, domain, or IP is present in the execution arguments, treat the loopback connection as **Local Proxy/VPN Routed Traffic** acting as a conduit to the external target.Because a local proxy routes traffic for the entire operating system, do NOT pivot on this local proxy port to hunt for other malware, as it will result in false positive associations with benign applications (e.g., updaters, background syncs) that are coincidentally using the same proxy.
+
 
 ***
 
@@ -6843,7 +6854,7 @@ A number of native Windows utilities have been used by adversaries to disable or
 
 On network devices, adversaries may leverage [Disk Wipe](https://attack.mitre.org/techniques/T1561) to delete backup firmware images and reformat the file system, then [System Shutdown/Reboot](https://attack.mitre.org/techniques/T1529) to reload the device. Together this activity may leave network devices completely inoperable and inhibit recovery operations.
 
-On ESXi servers, adversaries may delete or encrypt snapshots of virtual machines to support [Data Encrypted for Impact](https://attack.mitre.org/techniques/T1486), preventing them from being leveraged as backups (e.g., via  ` vim-cmd vmsvc/snapshot.removeall`).(Citation: Cybereason)
+On ESXi servers, adversaries may delete or encrypt snapshots of virtual machines to support [Data Encrypted for Impact](https://attack.mitre.org/techniques/T1486), preventing them from being leveraged as backups (e.g., via     ` vim-cmd vmsvc/snapshot.removeall`).(Citation: Cybereason)
 
 Adversaries may also delete “online” backups that are connected to their network – whether via network storage media or through folders that sync to cloud services.(Citation: ZDNet Ransomware Backups 2020) In cloud environments, adversaries may disable versioning and backup policies and delete snapshots, database backups, machine images, and prior versions of objects designed to be used in disaster recovery scenarios.(Citation: Dark Reading Code Spaces Cyber Attack)(Citation: Rhino Security Labs AWS S3 Ransomware)
 
@@ -12815,7 +12826,7 @@ Adversaries have also used malicious USB devices to emulate keystrokes that laun
 ## T1675
 
 **Technique Name**: ESXi Administration Command
-**Description**: Adversaries may abuse ESXi administration services to execute commands on guest machines hosted within an ESXi virtual environment. Persistent background services on ESXi-hosted VMs, such as the VMware Tools Daemon Service, allow for remote management from the ESXi server. The tools daemon service runs as `vmtoolsd.exe` on Windows guest operating systems, `vmware-tools-daemon` on macOS, and `vmtoolsd `  on Linux.(Citation: Broadcom VMware Tools Services)
+**Description**: Adversaries may abuse ESXi administration services to execute commands on guest machines hosted within an ESXi virtual environment. Persistent background services on ESXi-hosted VMs, such as the VMware Tools Daemon Service, allow for remote management from the ESXi server. The tools daemon service runs as `vmtoolsd.exe` on Windows guest operating systems, `vmware-tools-daemon` on macOS, and `vmtoolsd `     on Linux.(Citation: Broadcom VMware Tools Services)
 
 Adversaries may leverage a variety of tools to execute commands on ESXi-hosted VMs – for example, by using the vSphere Web Services SDK to programmatically execute commands and scripts via APIs such as `StartProgramInGuest`, `ListProcessesInGuest`,  `ListFileInGuest`, and `InitiateFileTransferFromGuest`.(Citation: Google Cloud Threat Intelligence VMWare ESXi Zero-Day 2023)(Citation: Broadcom Running Guest OS Operations) This may enable follow-on behaviors on the guest VMs, such as [File and Directory Discovery](https://attack.mitre.org/techniques/T1083), [Data from Local System](https://attack.mitre.org/techniques/T1005), or [OS Credential Dumping](https://attack.mitre.org/techniques/T1003).
 

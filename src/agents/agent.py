@@ -1,11 +1,11 @@
 from langchain_openai import ChatOpenAI
 
 from agents.attribution.attribution_agent import get_attribution_agent
+from agents.attribution.attributor import get_attributor_agent
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
 from agents.response_agent import get_response_agent
 from core.config import settings
-from agents.attribution.attributor import get_attributor_agent
 
 model = ChatOpenAI(
     model=settings.TEST_LLM_MODEL,

@@ -126,8 +126,15 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
 
 #     return json.dumps(archives, ensure_ascii=False)
 
+
 @tool
-def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10, start_time: str = None, end_time: str = None):
+def get_agent_archives(
+    agent_id: str,
+    keyword: str = "",
+    x_limit: int = 10,
+    start_time: str = None,
+    end_time: str = None,
+):
     """
     从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的原始归档日志，支持关键词搜索和时间过滤。
 
@@ -144,15 +151,15 @@ def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10, star
         end_time = _format_iso8601(end_time)
 
     search_results = agent_archives(
-        agent_id, 
-        keyword=keyword, 
-        x_limit=x_limit, 
-        payload=None, 
+        agent_id,
+        keyword=keyword,
+        x_limit=x_limit,
+        payload=None,
         timeout=30,
         start_time=start_time,
-        end_time=end_time
+        end_time=end_time,
     )
-    
+
     hits = search_results.get("hits", {}).get("hits", [])
     archives = [simplify_log(hit["_source"]) for hit in hits]
 
@@ -595,11 +602,12 @@ def get_process_activity_logs(
         - 若为 SERVICE_NAME: 传入"WMI"
         - 若为 USER_ACCOUNT: 传入 "LocalSystem", "Administrator"
     :param event_ids: 【必填】目标 EventID 列表。请严格根据调查意图选择对应的类别：
-        - ["3"]         : 网络连接行为 (Network Connections) - 用于检测 C2 通信、SMB 横向移动连接。
-        - ["7"]         : DLL/模块加载行为 (Image Loaded) - 用于检测恶意的 DLL 劫持或加载可疑模块。
-        - ["8", "10"]   : 进程注入与内存访问 (Process Injection/Access) - 用于检测远程线程注入、进程镂空等高级规避动作。
-        - ["11"]        : 文件创建与释放行为 (File Created) - 用于检测进程是否在磁盘上落地了木马、WebShell 或临时执行文件。
-        - ["7045"]      : 系统服务创建行为 (Service Installed) - 用于检测横向移动、权限提升或持久化木马注册后台服务。
+        - ["1"]         : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
+        - ["3"]         : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
+        - ["7"]         : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
+        - ["8", "10"]   : 进程注入与内存访问 (Process Injection & Memory Access) - 用于检测远程线程创建、进程镂空等规避动作。
+        - ["11"]        : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
+        - ["7045"]      : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
     :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
@@ -730,7 +738,8 @@ if __name__ == "__main__":
     messages = [
         {
             "role": "user",
-            "content": "调查agent005的网络连接行为，使用query_type='USER_ACCOUNT, query_value='defin',选取EventID 为3。应用时间范围：start_time '2026-03-25T18:41:02+08:00' 和 end_time '2026-03-25T18:45:02+08:00 ",
+            # "content": "调查agent005的网络连接行为，使用query_type='USER_ACCOUNT, query_value='defin',选取EventID 为3。应用时间范围：start_time '2026-03-25T18:41:02+08:00' 和 end_time '2026-03-25T18:45:02+08:00 ",
+            "content": "调查agent005的进程创建日志，使用query_type='FILE_PATH'，query_value='notepad.exe'。应用时间范围：start_time '2026-03-30T09:30:00+08:00' 和 end_time '2026-03-30T09:40:00+08:00'",
         }
     ]
     for chunk in indexer_agent.stream(

@@ -84,7 +84,9 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     return result
 
 
-def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None):
+def agent_archives(
+    agent_id, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None
+):
     logger.info("Getting archives information")
 
     url = f"https://{host}:9200/wazuh-archives-*/_search"
@@ -112,7 +114,7 @@ def agent_archives(agent_id, keyword="", x_limit=10, payload=None, timeout=30, s
                     must_conditions.append({"query_string": {"query": f"*{clean_keyword}*"}})
                 else:
                     must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
-        
+
         # 3. 追加时间范围过滤
         time_range = {}
         if start_time:

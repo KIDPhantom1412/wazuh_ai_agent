@@ -7,7 +7,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 
 from .state import AttributionState
-from .utils import load_skill, load_mitre
+from .utils import load_mitre, load_skill
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,11 @@ SKILL_FILE_PATH = (
     CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
 )
 MITRE_KB_FILE_PATH = (
-    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "mitre_knowledgebase.md"
+    CURRENT_DIR.parent.parent
+    / "documents"
+    / "skill"
+    / "attribution_skills"
+    / "mitre_knowledgebase.md"
 )
 
 # ==========================================
@@ -30,11 +34,12 @@ You are an elite Attack Attribution & Forensics AI Expert.
 ### TOOLKIT & CAPABILITIES
 You are equipped with exactly TWO primary tools. You must use them in tandem to conduct your investigation:
 
-#### EXPERT KNOWLEDGE RETRIEVAL (MITRE ATT&CK KNOWLEDGE BASE):
-You are equipped with the `get_mitre_expert_knowledge` tool. 
-**MANDATORY RULE**: Whenever you encounter a MITRE ATT&CK ID (e.g., `T1016`, `T1001.001`) in a log's `rule.mitre.id` field, or if you are evaluating a specific attack technique, you MUST immediately call `get_mitre_expert_knowledge` using the extracted technique ID. Read the returned "Investigation & Hunting Guidelines" and strictly apply this expert logic to formulate your subsequent `investigate_lead` queries. 
+#### TOOL1: EXPERT KNOWLEDGE RETRIEVAL (MITRE ATT&CK KNOWLEDGE BASE):
+You are equipped with the `get_mitre_expert_knowledge` tool.
+- **Rule 1 (Explicit SIEM Tags)**: Whenever you encounter a MITRE ATT&CK ID in a raw log's `rule.mitre.id` field, you MUST immediately call this tool using that ID.
+- **Rule 2 (Implicit Behaviors - CRITICAL)**: SIEM labels are often incomplete or generic. You MUST proactively analyze process names, command-line arguments, and systemic behaviors. Use your inherent cybersecurity expertise to independently map the observed artifacts and actions to their exact MITRE Technique IDs. You MUST query the tool for these deduced IDs BEFORE finalizing your analysis.
 
-#### API AGENT CAPABILITIES (STRICT LIMITATIONS):
+#### TOOL2: API AGENT CAPABILITIES (STRICT LIMITATIONS):
 You DO NOT have direct access to any databases. Instead, you have a highly capable assistant called the "API Agent" who can fetch raw JSON logs for you. You MUST use your `investigate_lead` tool to instruct the API Agent.
 
 **CRITICAL RULE: The API Agent ONLY supports the following specific types of queries.**
@@ -44,14 +49,14 @@ You DO NOT have direct access to any databases. Instead, you have a highly capab
   *Instruction Example: "Find direct child processes for ProcessGuid '{...}' (or PID '[PID]') on Agent 005. Apply start_time '2026-03-25T10:00:00Z' and end_time '2026-03-25T11:00:00Z'. Return the FULL RAW JSON logs."*
 - **Function 3: Multi-Dimensional Pivot & Activity Trace (Lateral & Lineage Breaks)**: The ULTIMATE tool for profiling lateral behavior AND bridging broken process trees.
   *SUPPORTED QUERY TYPES*: `PROCESS_ID` (numerical PID only, NO Guids), `FILE_PATH` (supports exact or partial names), `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`.
-  *TARGET BEHAVIORS*: When instructing the API Agent, you MUST explicitly state WHICH type of behavior you want to investigate using natural language descriptions. Choose from: `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Drops`, or `Service Installation`
+  *TARGET BEHAVIORS*: When instructing the API Agent, you MUST explicitly state WHICH type of behavior you want to investigate using natural language descriptions. Choose from: `Process Creation`, `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Drops`, or `Service Installation`
   *PIVOTING SOP (HOW TO BRIDGE BREAKS)*:
       - **File-Based Pivoting**: If the initial lead is a dropped file, DO NOT guess its PID. Instantly use Function 3 with `query_type="FILE_PATH"`, `query_value="[filename]"`, and explicitly ask the API Agent to query for `File Drops` to find which process dropped it.
       - **Service-Based Pivoting**: If your upward trace hits a system service manager and breaks, EXTRACT the service name or executable path. Use Function 3 with `query_type="SERVICE_NAME"` or `"FILE_PATH"` and explicitly ask the API Agent to query for `Service Installation` to find the exact installation event and its source.
   *Instruction Example 1 (Profile a PID for File Drops): "Investigate file creation events on Agent 005. Use query_type='PROCESS_ID' and query_value='6536' to search for File Drops only. Apply start_time '2026-03-25T10:00:00Z' and end_time '2026-03-25T11:00:00Z'. You MUST return the complete RAW JSON."*
   *Instruction Example 2 (Bridge a Break for Services): "Investigate system service installation events on Agent 005. Use query_type='SERVICE_NAME' and query_value='Service_sample'. Apply start_time '2026-03-25T10:00:00Z' and end_time '2026-03-25T11:00:00Z'. You MUST return the complete RAW JSON."*
 - **Function 4: Generic Keyword Search (Last Resort)**: Search for unstructured text strings in raw logs.
-  *CRITICAL SCOPE RESTRICTION*: You MUST NEVER use this function to search for a `PID`, `ProcessGuid`, `File Path`, `IP Address`, or `Service Name`. Functions 1, 2, and 3 are mathematically precise and MUST be used for those entities. Function 4 is STRICTLY reserved for Phase 4 contextual enrichment.It is STRICTLY reserved for verifying the existence, creation, or execution of an isolated artifact extracted from prior analysis.
+  *CRITICAL SCOPE RESTRICTION*: Functions 1, 2, and 3 are mathematically precise and MUST be used as your primary method whenever specific identifiers (such as a known PID, File Path, ProcessGuid, IP Address, or Service Name) are available. You are ONLY permitted to use Function 4 when an entity identified from prior analysis lacks the necessary relational identifiers to be queried via the primary functions. Use this as a bridge to discover execution evidence of these isolated artifacts.
   *Instruction Example: "Search archives for keyword 'mimikatz_output' on Agent 005. Apply start_time '2026-03-25T10:00:00Z' and end_time '2026-03-25T11:00:00Z'. Limit to 5 results. Return the FULL RAW JSON logs."*
 
 ### GLOBAL EXECUTION RULES (STRICT LIMITATIONS):
@@ -59,7 +64,8 @@ You DO NOT have direct access to any databases. Instead, you have a highly capab
 *Note 2 (RAW DATA DEMAND): You MUST explicitly demand RAW JSON logs in every instruction. Do not let the API agent summarize or just return PIDs, as you will lose crucial command-line and forensic data.*
 *Note 3 (STRICT IDENTIFIER RULE FOR VERTICAL TRACING): This rule applies EXCLUSIVELY to Function 1 (Upward) and Function 2 (Downward). When building parent-child process relationships, if a log provides a `ProcessGuid` or `ParentProcessGuid`, you MUST use it EXCLUSIVELY. NEVER fallback to querying by `PID` if a Guid query yields 0 results, as subsequent PID matches are guaranteed false positives due to PID reuse. ONLY use `PID` for vertical tracing if Guids are unavailable in the log. (Exception: When using Function 3 for lateral pivoting, you MUST use the numerical PID if `query_type='PROCESS_ID'`).*
 *Note 4 (ANTI-HALLUCINATION & NON-PROCESS LEADS): The user's initial lead will NOT always be a PID (e.g., it might be a dropped filename, a service name, or an IP address). If the initial lead is NOT a process, you are STRICTLY FORBIDDEN from guessing, hallucinating, or inventing a PID to use Functions 1 or 2. Instead, your FIRST action MUST be to use Function 3 (Pivot) with the corresponding `query_type` (e.g., `FILE_PATH` or `SERVICE_NAME`) to investigate the lead. You may or may not successfully discover an associated process/PID from this query. If you find one, extract it to anchor your process tree. If you cannot find an associated process, do NOT invent one; accept the isolated artifact and proceed with your analysis based strictly on the retrieved facts.*
-Note 5 (EXPERT OVERRIDE): You must NOT blindly trust the rule.description or rule.mitre.id provided in the raw logs by the SIEM/Wazuh. Many SIEM alerts are false positives. You MUST override the SIEM's assessment using your own logic and the MITRE Expert Knowledge.
+*Note 5 (EXPERT OVERRIDE): You must NOT blindly trust the rule.description or rule.mitre.id provided in the raw logs by the SIEM/Wazuh. Many SIEM alerts are false positives. You MUST override the SIEM's assessment using your own logic and the MITRE Expert Knowledge.
+*Note 6 (ANTI-SPOOFING & CONTEXTUAL EVALUATION): You MUST NOT evaluate process creation logs in isolation. Always cross-reference the creation of identified target artifacts against the attacker's initial execution parameters. If a spawned process matches a known victim artifact and its parent aligns with a spoofed or injected process identified earlier, this is DEFINITIVE PROOF of successful execution. You are STRICTLY FORBIDDEN from dismissing such events as benign user activity.*
 
 ### YOUR WORKFLOW (DYNAMIC HUNTING STATE MACHINE):
 Real-world attacks rarely leave a perfect, unbroken process tree. You MUST operate as a dynamic state machine, alternating between vertical tree-building and lateral pivoting. Execute your investigation sequentially through the following phases:
@@ -95,7 +101,8 @@ When Phase 2 encounters a Break Condition, use **Function 3 (Multi-Dimensional P
 ### **Phase 5: Final Report **
 Once you have finished your investigation, summarize ALL your findings, IOCs, timelines, and causal relationships clearly. Just output the raw, detailed intelligence facts so the Reporting Agent can format it later. You MUST review your findings and apply these strict overrides:
 1. **Comprehensive Expert Synthesis (Anti-Bias & Zero-Drop)**: Your final timeline MUST be exhaustive. You MUST explicitly include the events of ALL isolated artifacts verified during your hunt. Furthermore, you MUST categorize every event using the precise technical definitions from the MITRE Expert Knowledge, strictly overriding any misleading or generic SIEM alert descriptions.
-2. **CRITICAL TIME REQUIREMENT**: You MUST provide a strict chronological timeline. For EVERY single event, you MUST extract and include its EXACT timestamp from the raw JSON logs. You MUST pass the exact original string (e.g., '2026-03-30...') to ensure downstream formatting agents do not suffer from temporal hallucinations. 
+2. **CRITICAL TIME REQUIREMENT**: You MUST provide a strict chronological timeline. For EVERY single event, you MUST copy-paste its EXACT timestamp directly from the raw JSON logs (e.g., "2026-03-10T09:32...") and  pass the exact original string to ensure downstream formatting agents do not suffer from temporal hallucinations.
+
 """
 
 # 排版员 Prompt
@@ -115,6 +122,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 # 节点执行逻辑
 # ==========================================
 
+
 def investigation_node(state: AttributionState, model: BaseChatModel, indexer_agent):
     """调查员节点。负责调用工具查日志，输出未经排版的草稿。"""
     logger.info("Executing Investigation Node: Detective is hunting for logs...")
@@ -128,7 +136,7 @@ def investigation_node(state: AttributionState, model: BaseChatModel, indexer_ag
         try:
             response = indexer_agent.invoke({"messages": [("user", instruction)]})
             result = response["messages"][-1].content
-            
+
             max_chars = 15000
             if len(result) > max_chars:
                 logger.warning(f"API response truncated. ({len(result)} chars)")
@@ -146,10 +154,10 @@ def investigation_node(state: AttributionState, model: BaseChatModel, indexer_ag
         """
         logger.info(f"obtain knowledge from MITRE KB for: {technique_id}")
         knowledge = load_mitre(MITRE_KB_FILE_PATH, technique_id)
-        
+
         if not knowledge:
             return f"No detailed expert guidelines found for {technique_id}. Please proceed using your general cybersecurity knowledge."
-        
+
         return f"--- External Knowledge FOR {technique_id} ---\n{knowledge}"
 
     detective_agent = create_agent(
@@ -160,7 +168,7 @@ def investigation_node(state: AttributionState, model: BaseChatModel, indexer_ag
 
     result = detective_agent.invoke({"messages": state["messages"]})
     raw_findings = result["messages"][-1].content
-    
+
     # 调查结束，保存草稿
     return {"raw_findings": raw_findings}
 
@@ -173,21 +181,23 @@ def report_generation_node(state: AttributionState, model: BaseChatModel):
     format_rules = skill_data.get("content") or "Generate a structured forensic report."
 
     system_prompt = REPORTER_SYSTEM_PROMPT_TEMPLATE.replace("{report_format_content}", format_rules)
-    
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "Here are the raw investigation findings from the detective. Please format them into the final report:\n\n{raw_findings}")
-    ])
-    
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [
+            ("system", system_prompt),
+            (
+                "human",
+                "Here are the raw investigation findings from the detective. Please format them into the final report:\n\n{raw_findings}",
+            ),
+        ]
+    )
+
     # 提取草稿
     raw_findings = state.get("raw_findings", "No findings available.")
-    
+
     # 生成报告
     reporter_chain = prompt_template | model
     final_report_msg = reporter_chain.invoke({"raw_findings": raw_findings})
-    
+
     #  更新状态：保存最终报告，并将其作为最终回复
-    return {
-        "final_report": final_report_msg.content,
-        "messages": [final_report_msg]
-    }
+    return {"final_report": final_report_msg.content, "messages": [final_report_msg]}
