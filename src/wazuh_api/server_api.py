@@ -111,24 +111,16 @@ def get_config_agentless():
     return response.json()
 
 
-if __name__ == "__main__":
-    # print(get_wazuh_server_api_info())
-    print(get_agents_status_summary())
-    print(get_agents_os_summary())
-    print(list_agents(True))
-    print(get_agents_summary())
-    print(get_agents_overview())
-
-    print(get_config_agentless())
-
-
 def upload_rule_file(filename: str, content: str, overwrite: bool = False):
     """Upload a rule file to the Wazuh manager."""
     logger.info(f"Uploading rule file: {filename}")
-    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    upload_headers = {
+        "Authorization": f"Bearer {wazuh_server_token()}",
+        "Content-Type": "application/octet-stream",
+    }
     response = requests.put(
         f"{protocol}://{host}:{port}/rules/files/{filename}?overwrite={str(overwrite).lower()}",
-        headers=requests_headers,
+        headers=upload_headers,
         data=content,
         verify=False,
     )
@@ -187,12 +179,12 @@ def validate_configuration():
     return response.json()
 
 
-def run_logtest(log_event: str, token: str = None, location: str = None):
+def run_logtest(log_event: str, token: str = None, location: str = None, log_format: str = "json"):
     """Run logtest against a log event."""
     logger.info("Running logtest")
     requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
 
-    payload = {"log": log_event}
+    payload = {"event": log_event, "log_format": log_format}
     if token:
         payload["token"] = token
     if location:
@@ -209,3 +201,13 @@ def run_logtest(log_event: str, token: str = None, location: str = None):
     else:
         logger.error(f"Failed to run logtest: {response.text}")
     return response.json()
+
+if __name__ == "__main__":
+    # print(get_wazuh_server_api_info())
+    print(get_agents_status_summary())
+    print(get_agents_os_summary())
+    print(list_agents(True))
+    print(get_agents_summary())
+    print(get_agents_overview())
+
+    print(get_config_agentless())

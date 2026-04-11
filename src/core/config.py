@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str | None
     EMBEDDING_DIMENSION: int = 384
     HF_ENDPOINT: str = "https://hf-mirror.com"
-    
+
     LANGSMITH_TRACING: bool = False
     LANGSMITH_ENDPOINT: str | None = None
     LANGSMITH_API_KEY: str | None = None

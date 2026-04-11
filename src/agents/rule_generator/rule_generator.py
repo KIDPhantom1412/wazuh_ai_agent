@@ -36,7 +36,7 @@ def get_rule_generator_agent(model: BaseChatModel):
         "log_retrieval_feasibility", partial(log_retrieval_feasibility_node, model=model)
     )
     workflow.add_node("rule_generation", partial(rule_generation_node, model=model))
-    workflow.add_node("rule_verification", rule_verification_node)
+    workflow.add_node("rule_verification", partial(rule_verification_node, model=model))
     workflow.add_node("cleanup_rule", cleanup_rule_node)
     workflow.add_node("response", partial(response_node, model=model))
 
