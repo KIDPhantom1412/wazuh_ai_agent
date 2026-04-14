@@ -471,6 +471,7 @@ def search_process_activities(
                         "data.win.eventdata.targetImage",
                         "data.win.eventdata.targetFilename",
                         "data.win.eventdata.imagePath",
+                        "data.win.eventdata.commandLine",
                     ],
                 }
             }
@@ -607,6 +608,7 @@ def get_process_activity_logs(
         - ["7"]         : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
         - ["8", "10"]   : 进程注入与内存访问 (Process Injection & Memory Access) - 用于检测远程线程创建、进程镂空等规避动作。
         - ["11"]        : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
+        - ["25"]        : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
         - ["7045"]      : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
     :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
@@ -739,7 +741,8 @@ if __name__ == "__main__":
         {
             "role": "user",
             # "content": "调查agent005的网络连接行为，使用query_type='USER_ACCOUNT, query_value='defin',选取EventID 为3。应用时间范围：start_time '2026-03-25T18:41:02+08:00' 和 end_time '2026-03-25T18:45:02+08:00 ",
-            "content": "调查agent005的进程创建日志，使用query_type='FILE_PATH'，query_value='notepad.exe'。应用时间范围：start_time '2026-03-30T09:30:00+08:00' 和 end_time '2026-03-30T09:40:00+08:00'",
+            # "content": "调查agent005的进程创建日志，使用query_type='FILE_PATH'，query_value='notepad.exe'。应用时间范围：start_time '2026-03-30T09:30:00+08:00' 和 end_time '2026-03-30T09:40:00+08:00'",
+            "content": "调查agent005的进程创建日志，使用query_type='FILE_PATH'，query_value='bitsadmin3_flag.ps1'。应用时间范围：start_time '2026-04-13T09:00:00+08:00' 和 end_time '2026-04-13T010:00:00+08:00'",
         }
     ]
     for chunk in indexer_agent.stream(
