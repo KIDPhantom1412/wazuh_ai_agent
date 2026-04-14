@@ -109,24 +109,6 @@ def get_agent_alerts(agent_id, x_limit, ruleId):
     return json.dumps(alerts)
 
 
-# @tool
-# def get_agent_archives(agent_id: str, keyword: str = "", x_limit: int = 10):
-#     """
-#     从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的日志，支持关键词搜索。
-
-#     :param agent_id: Agent 的唯一 ID (如 "001")
-#     :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
-#     :param x_limit: 返回的日志条数, 默认为 10
-#     """
-#     search_results = agent_archives(
-#         agent_id, keyword=keyword, x_limit=x_limit, payload=None, timeout=30
-#     )
-#     hits = search_results.get("hits", {}).get("hits", [])
-#     archives = [simplify_log(hit["_source"]) for hit in hits]
-
-#     return json.dumps(archives, ensure_ascii=False)
-
-
 @tool
 def get_agent_archives(
     agent_id: str,
@@ -277,10 +259,10 @@ def simplify_log(source):
         "sourceImage",
         "targetProcessId",
         "targetImage",
-        "sourceProcessGuid",  # 来自 Event 8
-        "targetProcessGuid",  # 来自 Event 8
-        "sourceProcessGUID",  # 来自 Event 10
-        "targetProcessGUID",  # 来自 Event 10
+        "sourceProcessGuid",
+        "targetProcessGuid",
+        "sourceProcessGUID",
+        "targetProcessGUID",
         "grantedAccess",
         "startAddress",
         "callTrace",

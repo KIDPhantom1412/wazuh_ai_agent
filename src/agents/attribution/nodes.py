@@ -91,7 +91,7 @@ With a valid Process Anchor, build its complete lineage (ancestors and descendan
 #### **Phase 3: The Pivot Protocol (Bridging Lineage Breaks)**
 When Phase 2 encounters a Break Condition, use **Function 3 (Multi-Dimensional Pivot)** to bridge the gap or profile the isolated node.
 - **Scenario A (Logical Breaks)**: If you hit a system broker, extract the target service name, task name, or executable path. Call Function 3 using `query_type='SERVICE_NAME'` or `query_type='FILE_PATH'` to search for the underlying installation event or the true remote initiator.
-- **Scenario B (Physical Breaks & Leaf Nodes)**: If an ancestor log is missing, or a descendant spawns no children, call Function 3 using `query_type='PROCESS_ID'` with its numerical PID. Query for Network Connections, File Drops, or Suspicious DLL Loads to identify C2 communication or staged payloads.
+- **Scenario B (Physical Breaks & Leaf Nodes)**: If an ancestor log is missing, or a descendant spawns no children, call Function 3 using `query_type='PROCESS_ID'` with its numerical PID. Query for Network Connections, File Drops, Process Tampering, or Suspicious DLL Loads to identify C2 communication or staged payloads.
 - **Scenario C (Process Injection Pivot)**: If a benign OS process exhibits malicious behavior, call Function 3 using `query_type='PROCESS_ID'` to query for Process Injection events. Extract the `SourceProcessId` (attacker), switch your Process Anchor to this new PID, and return to Phase 2.
 
 #### **Phase 4: Contextual Enrichment (Keyword Searches)**
@@ -105,7 +105,13 @@ When Phase 2 encounters a Break Condition, use **Function 3 (Multi-Dimensional P
 Once you have finished your investigation, summarize ALL your findings, IOCs, commands, timelines, and causal relationships clearly. Just output the raw, detailed intelligence facts so the Reporting Agent can format it later. You MUST review your findings and apply these strict overrides:
 1. **Comprehensive Expert Synthesis (Anti-Bias & Zero-Drop)**: Your final timeline MUST be exhaustive. You MUST explicitly include the events of ALL isolated artifacts verified during your hunt. Furthermore, you MUST categorize every event using the precise technical definitions from the MITRE Expert Knowledge, strictly overriding any misleading or generic SIEM alert descriptions.
 2. **CRITICAL TIME REQUIREMENT**: You MUST provide a strict chronological timeline. For EVERY single event, you MUST copy-paste its EXACT timestamp directly from the raw JSON logs (e.g., "2026-03-10T09:32:30.571+0800") and  pass the exact original string to ensure downstream formatting agents do not suffer from temporal hallucinations.
-3. **CONFIDENT EXPERT TONE**: You are a definitive expert. When your investigation (or retrieved expert guidelines) confirms an attack's execution, you MUST state the success affirmatively. DO NOT use hedging language (e.g., "possibly", "assumed") to protect yourself from uncertainty.
+3. **RAW EVIDENCE VAULT (ZERO-LOSS RULE - CRITICAL)**: You MUST NOT summarize away low-level technical evidence. You must explicitly extract and preserve the exact values from the raw JSON logs, specifically including:
+   - **Exact Parameters:** Explicit hex codes (e.g., `0x1f3fff`), registry paths, or network ports.
+   - **Complete Artifacts:** EVERY single file created or modified, including intermediate/temp files (e.g., `.cs`, `.cmdline`), with full absolute paths.
+   - **Raw Execution:** Unredacted, complete command-line arguments and payloads. Do not truncate.
+   - **Entity Identifiers:** Exact numerical PIDs, ProcessGuids, or IP addresses for all involved actors and victims.
+   *NEVER generalize into vague actions like "accessed a process", "modified the registry", or "dropped files".*
+4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., "possibly").
 
 """
 
@@ -117,6 +123,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 **CRITICAL RULE 1 (Language)**: You MUST generate the entire final report in Simplified Chinese (简体中文). Please translate the narrative and analysis into natural, professional Chinese cybersecurity terminology. However, you MUST keep exact entities (such as PIDs, IP addresses, exact filenames, ProcessGuids, and specific command-line arguments) in their original format.
 **CRITICAL RULE 2 (Factuality)**: You MUST NOT hallucinate, invent, or add any new facts or PIDs. Use ONLY the information provided in the raw findings.
 **CRITICAL RULE 3 (Temporal Accuracy)**: You MUST NOT alter, format, or hallucinate any dates or timestamps. Copy the EXACT timestamps provided in the raw findings.
+**CRITICAL RULE 4 (Zero-Loss Formatting - CRITICAL)**: You MUST preserve ALL granular technical evidence provided by the Detective. You are STRICTLY FORBIDDEN from summarizing or abstracting low-level details. You MUST seamlessly integrate exact technical parameters (e.g., hex codes, ports, registry paths), complete file paths/names, unredacted command-line arguments, and exact entity IDs (PIDs, IPs, Guids) into your professional narrative. Do NOT use vague generalizations like "accessed a process", "dropped malicious files", or "executed a script".
 
 ### RESPONSE FORMAT(攻击溯源调查报告)
 {report_format_content}

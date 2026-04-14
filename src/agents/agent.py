@@ -1,3 +1,4 @@
+import httpx
 from langchain_openai import ChatOpenAI
 
 from agents.attribution.attribution_agent import get_attribution_agent
@@ -7,10 +8,21 @@ from agents.indexer_agent import get_indexer_agent
 from agents.response_agent import get_response_agent
 from core.config import settings
 
+# 自定义 HTTP 客户端，专门解决 chunked read 报错
+custom_http_client = httpx.Client(
+    timeout=httpx.Timeout(
+        connect=30.0,
+        read=180.0,  # 将读取超时延长至 3 分钟，给足大模型输出溯源报告的时间
+        write=30.0,
+        pool=30.0,
+    )
+)
+
 model = ChatOpenAI(
     model=settings.TEST_LLM_MODEL,
     api_key=settings.TEST_LLM_API_KEY,
     base_url=settings.TEST_LLM_BASE_URL,
+    http_client=custom_http_client,
 )
 
 demo_agent = get_demo_agent(model)
