@@ -1,7 +1,6 @@
 import httpx
 from langchain_openai import ChatOpenAI
 
-from agents.attribution.attribution_agent import get_attribution_agent
 from agents.attribution.attributor import get_attributor_agent
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
@@ -28,5 +27,4 @@ model = ChatOpenAI(
 demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
 response_agent = get_response_agent(model)
-attribution_agent = get_attribution_agent(model, indexer_agent)
 attributor_agent = get_attributor_agent(model, indexer_agent)
