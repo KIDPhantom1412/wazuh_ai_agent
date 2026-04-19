@@ -59,6 +59,7 @@ class SynthesizedFindings(BaseModel):
 
 """
 Nodes:
+0. Decision_Node
 1. Attribution_Planner_Node
 2. Log_Retrieval_Node
 3. Information_Synthesizer_Node
@@ -69,6 +70,128 @@ Nodes:
 """
 
 
+def decision_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
+    """Node 0: Decision Node (The Brain for Initialization)."""
+    logger.info("Executing Decision Node...")
+
+    is_clue_confirmed = state.get("is_clue_confirmed")
+    requires_mitre_kb = state.get("requires_mitre_kb")
+    investigation_clue = state.get("investigation_clue")
+    pending_type = state.get("pending_question_type")
+    messages = state.get("messages", [])
+
+    last_message = messages[-1] if messages else None
+    is_human = last_message.type == "human" if last_message else False
+    user_text = last_message.content if is_human else ""
+
+    if not is_clue_confirmed:
+        if not investigation_clue:
+            # 判断是原始日志还是现成线索
+            logger.info("Phase 1: Analyzing initial input...")
+            system_prompt = """
+            You are a Cybersecurity Triage Expert.
+            Analyze the user's input: is it a raw JSON/System log, or a clear natural language attack clue?
+
+            [CRITERIA]
+            A "clear natural language attack clue" typically describes an alert, the compromised agent, the malicious behavior, and a strict time boundary.
+            Example of a valid clue: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:10 到 14:20 之间。"
+
+            [INSTRUCTIONS]
+            1. If it is ALREADY a clear natural language clue, output exactly 'READY'.
+            2. If it is a raw log, extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese. Output ONLY the new clue. Do NOT output 'READY'.
+            3. TIMEZONE CONVERSION RULE (CRITICAL): You MUST normalize all extracted time boundaries into Beijing Time (UTC+8).
+               - If the raw log timestamp is in UTC (e.g., ends with 'Z' like "2026-03-30T01:30:00Z"), you MUST manually add 8 hours to calculate the correct Beijing Time (e.g., "2026-03-30 09:30:00").
+               - If the raw log is already in Beijing Time (e.g., contains "+0800"), use the exact time provided.
+               - If the timezone is completely missing, assume it is Beijing Time.
+               - In ALL cases, you MUST explicitly append "（北京时间）" to the final time boundary in your generated clue to confirm the conversion.
+            4. Output ONLY the newly generated clue. Do NOT output 'READY' if you generated a clue.
+
+            """
+
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", system_prompt), ("human", "{user_text}")]
+            )
+            result = (prompt | model).invoke({"user_text": user_text})
+            analysis = result.content.strip()
+
+            if analysis == "READY":
+                return {
+                    "investigation_clue": user_text,
+                    "is_clue_confirmed": True,
+                    "next_action": {"target": "Decision_Node"},
+                }
+            else:
+                return {
+                    "investigation_clue": analysis,
+                    "pending_question_type": "CLUE",
+                    "next_action": {"target": "User_Input_Node", "instruction": "ASK_CLUE"},
+                }
+        else:
+            # 线索已存在，大模型判断用户的回复是同意还是要求修改
+            if is_human and pending_type == "CLUE":
+                logger.info("Phase 1: Parsing user feedback on clue...")
+                system_prompt = """You are an intent parsing and rewriting assistant.
+                Current clue: '{clue}'
+                User feedback: '{user_text}'
+                1. If user agrees/confirms (e.g., '是', 'yes', '确认', 'ok'), output exactly 'AGREE'.
+                2. If user wants to modify, rewrite the clue COMPLETELY incorporating their feedback. Output ONLY the new revised clue."""
+                prompt = ChatPromptTemplate.from_messages([("system", system_prompt)])
+                result = (prompt | model).invoke(
+                    {"clue": investigation_clue, "user_text": user_text}
+                )
+                intent = result.content.strip()
+
+                if intent.upper() == "AGREE":
+                    return {
+                        "is_clue_confirmed": True,
+                        "pending_question_type": None,
+                        "next_action": {"target": "Decision_Node"},
+                    }
+                else:
+                    return {
+                        "investigation_clue": intent,
+                        "next_action": {
+                            "target": "User_Input_Node",
+                            "instruction": "ASK_CLUE_MODIFIED",
+                        },
+                    }
+
+    if is_clue_confirmed and requires_mitre_kb is None:
+        if is_human and pending_type == "MITRE":
+            logger.info("Phase 2: Parsing MITRE response...")
+            system_prompt = "Analyze if user agreed (YES) or declined (NO). Chinese '是/开启' = YES, '否/关闭/不用' = NO. Output strictly 'YES' or 'NO'."
+            prompt = ChatPromptTemplate.from_messages(
+                [("system", system_prompt), ("human", "{user_text}")]
+            )
+            result = (prompt | model).invoke({"user_text": user_text})
+            intent = result.content.strip().upper()
+
+            if "YES" in intent:
+                return {
+                    "requires_mitre_kb": True,
+                    "pending_question_type": None,
+                    "messages": [AIMessage(content="已开启 MITRE 专家知识库，正在为您深入调查...")],
+                    "next_action": {"target": "Decision_Node"},
+                }
+            else:
+                return {
+                    "requires_mitre_kb": False,
+                    "pending_question_type": None,
+                    "messages": [
+                        AIMessage(content="已关闭 MITRE 专家知识库，将仅根据日志事实进行排查...")
+                    ],
+                    "next_action": {"target": "Decision_Node"},
+                }
+        else:
+            return {
+                "pending_question_type": "MITRE",
+                "next_action": {"target": "User_Input_Node", "instruction": "ASK_MITRE"},
+            }
+
+    logger.info("Initialization complete. Routing to Attribution Planner Node.")
+    return {"next_action": {"target": "Attribution_Planner_Node"}}
+
+
 def attribution_planner_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
     """
     Node 1: Attribution Planner Node.
@@ -76,14 +199,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     logger.info("Executing Attribution Planner Node")
 
     use_mitre = state.get("requires_mitre_kb")
-    if use_mitre is None:
-        logger.info("Ask the user whether to enable the MITRE knowledge base....")
-        return {
-            "next_action": {
-                "target": "User_Input_Node",
-                "instruction": "攻击溯源调查已启动。您是否希望开启 MITRE 专家知识库辅助分析？",
-            }
-        }
+    state.get("investigation_clue", "未提供有效初始线索")
 
     messages = state.get("messages", [])
     vault = state.get("evidence_vault", [])
@@ -128,9 +244,6 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
 - 'Reporter_Node': Routes to the reporting engine to close the case.
   - **When to use**: Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence in the vault.
   - **How to instruct**: Provide a brief draft/summary of the attack narrative for the reporter to expand upon.
-
-- 'User_Input_Node': Routes to the human operator.
-  - **When to use**: Use this ONLY if you need to ask the human user a clarifying question to proceed.
 
 {mitre_instructions}
 
@@ -548,78 +661,39 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
 
 def user_input_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 7: User Input Node."""
-    logger.info("Executing User Input Node")
+    """Node 7: User Input Node ."""
+    logger.info("Executing User Input Node (Suspending...)")
 
-    requires_mitre_kb = state.get("requires_mitre_kb")
-    has_asked_mitre = state.get("has_asked_mitre", False)
-    messages = state.get("messages", [])
+    next_action = state.get("next_action")
+    instruction = next_action.get("instruction") if next_action else ""
+    clue = state.get("investigation_clue", "")
 
-    last_message = messages[-1] if messages else None
-    is_human = last_message.type == "human" if last_message else False
-    user_text = last_message.content if is_human else ""
+    if instruction == "ASK_CLUE":
+        return {
+            "messages": [
+                AIMessage(
+                    content=f"系统检测到原始日志输入。我为您提取了如下调查线索：\n\n『{clue}』\n\n请问该线索是否符合您的要求？（如果您同意，请回复“是”；如需修改时间范围等信息，请直接指出）"
+                )
+            ],
+            "next_action": None,
+        }
+    elif instruction == "ASK_CLUE_MODIFIED":
+        return {
+            "messages": [
+                AIMessage(
+                    content=f"已根据您的意见修改线索如下：\n\n『{clue}』\n\n请问现在的线索是否符合您的要求？"
+                )
+            ],
+            "next_action": None,
+        }
+    elif instruction == "ASK_MITRE":
+        return {
+            "messages": [
+                AIMessage(
+                    content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
+                )
+            ],
+            "next_action": None,
+        }
 
-    # 情况 1：requires_mitre_kb 为 None
-    if requires_mitre_kb is None:
-
-        # 1.1 如果已经提问过，且最新消息是用户发的，说明用户正在回答，调用大模型解析意图
-        if has_asked_mitre and is_human:
-            logger.info("Parsing user intent using LLM...")
-
-            system_prompt = (
-                "You are an intent parsing assistant. The user was asked if they want to enable the MITRE ATT&CK knowledge base. "
-                "Analyze the user's input and determine if they agreed (YES) or declined (NO). "
-                "CRITICAL RULE: Even if the user replies in Chinese (e.g., '是', '好的', '开启', 'yes', 'y'), you MUST output exactly the English word 'YES'. "
-                "If they decline (e.g., '否', '不要', '关闭', 'no', 'n'), output exactly 'NO'. "
-                "Output strictly 'YES' or 'NO' with no other text."
-            )
-
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", system_prompt), ("human", "{user_text}")]
-            )
-
-            try:
-                result = (prompt | model).invoke({"user_text": user_text})
-                intent = result.content.strip().upper()
-
-                if "YES" in intent:
-                    logger.info("Parsed Intent: YES (from LLM)")
-                    return {
-                        "requires_mitre_kb": True,
-                        "next_action": None,
-                        "messages": [
-                            AIMessage(content="已为您开启 MITRE 专家知识库，正在为您深入调查...")
-                        ],
-                    }
-                else:
-                    logger.info("Parsed Intent: NO (from LLM)")
-                    return {
-                        "requires_mitre_kb": False,
-                        "next_action": None,
-                        "messages": [
-                            AIMessage(
-                                content="已关闭 MITRE 专家知识库，将仅根据日志事实进行排查..."
-                            )
-                        ],
-                    }
-            except Exception as e:
-                logger.error("Error parsing user intent: %s", e)
-                return {"next_action": None}
-
-        # 1.2 如果尚未提问，生成询问提示词，并更新提问状态
-        else:
-            logger.info("Prompting user for MITRE KB usage.")
-            return {
-                "has_asked_mitre": True,
-                "messages": [
-                    AIMessage(
-                        content="调查已启动。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入 yes 或 no)"
-                    )
-                ],
-            }
-
-    # 情况 2：其他情况直接 return
-    logger.info("No user input required at this stage. Returning control.")
-
-    # 清空 next_action，防止死循环，把图的流转权交回给大脑
     return {"next_action": None}

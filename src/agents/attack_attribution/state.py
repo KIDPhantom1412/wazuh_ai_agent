@@ -45,7 +45,11 @@ class AttributionState(TypedDict):
     # 报告
     final_report: str | None
 
+    # 初始化决策状态变量
+    investigation_clue: str | None
+    is_clue_confirmed: bool | None
+    pending_question_type: str | None
+
     # 可选配置
     requires_mitre_kb: bool | None
-    has_asked_mitre: bool | None
     requires_evaluation: bool | None  # 保留字段 用于评估溯源
