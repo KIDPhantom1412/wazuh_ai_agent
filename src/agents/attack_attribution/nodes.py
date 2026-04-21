@@ -99,11 +99,11 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             [INSTRUCTIONS]
             1. If it is ALREADY a clear natural language clue, output exactly 'READY'.
             2. If it is a raw log, extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese. Output ONLY the new clue. Do NOT output 'READY'.
-            3. TIMEZONE CONVERSION RULE (CRITICAL): You MUST normalize all extracted time boundaries into Beijing Time (UTC+8).
-               - If the raw log timestamp is in UTC (e.g., ends with 'Z' like "2026-03-30T01:30:00Z"), you MUST manually add 8 hours to calculate the correct Beijing Time (e.g., "2026-03-30 09:30:00").
-               - If the raw log is already in Beijing Time (e.g., contains "+0800"), use the exact time provided.
-               - If the timezone is completely missing, assume it is Beijing Time.
-               - In ALL cases, you MUST explicitly append "（北京时间）" to the final time boundary in your generated clue to confirm the conversion.
+            3. TIME WINDOW & ZONE RULE (CRITICAL):
+               When generating the time boundary from a raw log, you MUST perform the following steps exactly:
+               - (Timezone Normalization): Normalize the raw log timestamp into Beijing Time (UTC+8). If the log is in UTC (e.g., ends with 'Z'), you must manually add 8 hours. If it already contains "+0800" or lacks a timezone, treat it as Beijing Time.
+               - (Window Calculation): Create a 10-minute investigation window centered around this normalized Beijing Time. Calculate the start time by subtracting 5 minutes, and the end time by adding 5 minutes. (For example, if the log's actual time is 10:16:35, your time boundary MUST be from 10:11:35 to 10:21:35).
+               - (Formatting): In ALL cases, you MUST explicitly append "（北京时间）" to the final time boundary in your generated clue.
             4. Output ONLY the newly generated clue. Do NOT output 'READY' if you generated a clue.
 
             """
@@ -211,11 +211,19 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
             if vault
             else "Vault is currently empty."
         )
-        kb_str = (
-            json.dumps(mitre_kb, ensure_ascii=False, indent=2)
-            if mitre_kb
-            else "No external knowledge retrieved yet."
-        )
+
+        if mitre_kb:
+            kb_paragraphs = []
+            for tid, content in mitre_kb.items():
+                kb_paragraphs.append(f"【{tid}】\n{content}")
+            kb_str = "\n\n".join(kb_paragraphs)
+        else:
+            kb_str = "No external knowledge retrieved yet."
+        # kb_str = (
+        #     json.dumps(mitre_kb, ensure_ascii=False, indent=2)
+        #     if mitre_kb
+        #     else "No external knowledge retrieved yet."
+        # )
     except Exception as e:
         logger.error("Error formatting state context: %s", e)
         vault_str = str(vault)
@@ -436,11 +444,19 @@ def information_synthesizer_node(
 
     try:
         logs_str = json.dumps(raw_logs[:20], ensure_ascii=False, indent=2)
-        kb_str = (
-            json.dumps(mitre_kb, ensure_ascii=False, indent=2)
-            if mitre_kb
-            else "No MITRE context available."
-        )
+
+        if mitre_kb:
+            kb_paragraphs = []
+            for tid, content in mitre_kb.items():
+                kb_paragraphs.append(f"【{tid}】\n{content}")
+            kb_str = "\n\n".join(kb_paragraphs)
+        else:
+            kb_str = "No MITRE context available."
+        # kb_str = (
+        #     json.dumps(mitre_kb, ensure_ascii=False, indent=2)
+        #     if mitre_kb
+        #     else "No MITRE context available."
+        # )
     except Exception as e:
         logger.error("Error formatting logs or KB: %s", e)
         logs_str = str(raw_logs[:20])
@@ -609,11 +625,19 @@ Your task is to take the raw investigation findings provided by the Forensic Det
             if evidence_vault
             else "No concrete evidence extracted."
         )
-        kb_str = (
-            json.dumps(mitre_kb, ensure_ascii=False, indent=2)
-            if mitre_kb
-            else "No MITRE context available."
-        )
+
+        if mitre_kb:
+            kb_paragraphs = []
+            for tid, content in mitre_kb.items():
+                kb_paragraphs.append(f"【{tid}】\n{content}")
+            kb_str = "\n\n".join(kb_paragraphs)
+        else:
+            kb_str = "No MITRE context available."
+        # kb_str = (
+        #     json.dumps(mitre_kb, ensure_ascii=False, indent=2)
+        #     if mitre_kb
+        #     else "No MITRE context available."
+        # )
     except Exception as e:
         logger.error("Error formatting vault or KB: %s", e)
         vault_str = str(evidence_vault)

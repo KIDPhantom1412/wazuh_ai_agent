@@ -19,7 +19,12 @@ def merge_kb(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
 
 class ActionCommand(BaseModel):
     target: Literal[
-        "Log_Retrieval_Node", "MITRE_Expert_Node", "User_Input_Node", "Reporter_Node"
+        "Log_Retrieval_Node",
+        "MITRE_Expert_Node",
+        "User_Input_Node",
+        "Reporter_Node",
+        "Decision_Node",
+        "Attribution_Planner_Node",
     ] = Field(description="The target node to route to.")
     instruction: str = Field(
         description="The specific instruction or query to pass to the target node."
