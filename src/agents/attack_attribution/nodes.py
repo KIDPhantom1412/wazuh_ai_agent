@@ -30,30 +30,17 @@ MITRE_KB_FILE_PATH = (
 )
 
 
-class EvidenceItem(BaseModel):
-    indicator_type: str = Field(
-        description="The type of the evidence. E.g., 'PID', 'IP_ADDRESS', 'FILE_PATH', 'COMMAND_LINE', 'REGISTRY_KEY', 'PORT'."
-    )
-    value: str = Field(
-        description="The exact value from the log. MUST be unredacted (e.g., exact absolute path, complete command line, exact hex code like '0x1f3fff'). DO NOT truncate."
-    )
-    timestamp: str = Field(
-        description="The exact chronological timestamp. MUST copy-paste the EXACT string directly from the raw JSON log (e.g., '2026-03-10T09:32:30.571Z')."
-    )
-    description: str = Field(
-        description="Technical description of what this artifact did. NEVER generalize into vague actions."
-    )
-    # mitre_tactic: Optional[str] = Field(
-    #     description="The precise technical definition/tactic from the MITRE Expert Knowledge, overriding generic SIEM alerts. Leave null if not applicable."
-    # )
-
-
 class SynthesizedFindings(BaseModel):
-    new_evidence: list[EvidenceItem] = Field(
-        description="Exhaustive list of all isolated artifacts and raw evidence preserved with ZERO-LOSS."
+    task_description: str = Field(
+        description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
     )
-    summary: str = Field(
-        description="A strict chronological timeline and factual summary of the events. Must be affirmatively stated with confident expert tone. Must be in Chinese."
+    detailed_findings: str = Field(
+        description="""A strict chronological timeline and factual summary of the events.
+        CRITICAL ZERO-LOSS RULE: You MUST embed all exact technical Evidence/IOCs directly into this narrative.
+        Whenever you mention an event, you MUST include its exact timestamp, exact PID, full absolute file path, unredacted command line, and any related IPs/Ports.
+        DO NOT generalize.
+        ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
+        FORMATTING RULE: DO NOT output any title or markdown headers. Just output the pure paragraph content. Must be affirmatively stated in Chinese."""
     )
 
 
@@ -65,8 +52,7 @@ Nodes:
 3. Information_Synthesizer_Node
 4. MITRE_Expert_Node - optinal
 5. Reporter_Node
-6. Evaluator_Node - optional
-7. User_Input_Node
+6. User_Input_Node
 """
 
 
@@ -202,16 +188,9 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     state.get("investigation_clue", "未提供有效初始线索")
 
     messages = state.get("messages", [])
-    vault = state.get("evidence_vault", [])
     mitre_kb = state.get("mitre_knowledge_base", {})
 
     try:
-        vault_str = (
-            json.dumps(vault, ensure_ascii=False, indent=2)
-            if vault
-            else "Vault is currently empty."
-        )
-
         if mitre_kb:
             kb_paragraphs = []
             for tid, content in mitre_kb.items():
@@ -226,7 +205,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
         # )
     except Exception as e:
         logger.error("Error formatting state context: %s", e)
-        vault_str = str(vault)
         kb_str = str(mitre_kb)
 
     mitre_instructions = ""
@@ -258,8 +236,9 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
 ### LOG RETRIEVAL NODE INSTRUCTION RULES
 When routing to the `Log_Retrieval_Node`, your `instruction` string MUST explicitly declare:
 1. **The Investigation Target**: Choose from: numerical `PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, or `USER_ACCOUNT`.
-2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list—do not select multiple behaviors. The available options are: `Process Creation` (Upward/Downward tracking), `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Drops`, `Process Tampering`, or `Service Installation`.
-3. **Keyword Searches (Last Resort)**: Use generic keyword searches ONLY when an entity lacks the necessary relational identifiers (PID, IP, etc.) to be queried via the primary behaviors.
+2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list. The available options are: `Process Creation (Upward)`, `Process Creation (Downward)`, `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Drops`, `Process Tampering`, or `Service Installation`.
+3. **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
+4. **Keyword Searches (Last Resort)**: Use generic keyword searches ONLY when an entity lacks the necessary relational identifiers (PID, IP, etc.) to be queried via the primary behaviors.
 
 ### YOUR INVESTIGATION STRATEGY (DYNAMIC HUNTING STATE MACHINE)
 Execute your investigation as a continuous loop through the following phases. Jump back to earlier phases if new actionable evidence emerges:
@@ -294,8 +273,6 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 2. **TIME BOUNDARIES (CRITICAL)**: All backend tools strictly require UTC time. If a time is provided but the timezone is NOT explicitly specified, you MUST default to assuming it is Beijing Time (UTC+8). You MUST manually subtract 8 hours from the provided time to calculate the exact UTC time BEFORE instructing the Log_Retrieval_Node. You MUST pass the complete and exact ISO8601 UTC time boundary in your instructions.
 
 ### CURRENT CASE CONTEXT
-- **Evidence Vault (Confirmed IOCs/Facts)**:
-{vault_str}
 
 - **MITRE Knowledge Base**:
 {kb_str}
@@ -317,7 +294,6 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
             {
                 "messages": messages,
                 "mitre_instructions": mitre_instructions,
-                "vault_str": vault_str,
                 "kb_str": kb_str,
                 "format_instructions": parser.get_format_instructions(),
             }
@@ -513,21 +489,24 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
             }
         )
 
-        if hasattr(result, "new_evidence"):
-            new_evidence = [item.model_dump() for item in result.new_evidence]
-        else:
-            new_evidence = result.get("new_evidence", [])
-
-        summary = (
-            result.summary if hasattr(result, "summary") else result.get("summary", "解析完成。")
+        task_desc = (
+            result.task_description
+            if hasattr(result, "task_description")
+            else result.get("task_description", "未提取到指令")
+        )
+        findings = (
+            result.detailed_findings
+            if hasattr(result, "detailed_findings")
+            else result.get("detailed_findings", "解析完成，未发现异常。")
         )
 
-        logger.info("Synthesis complete. Extracted %d evidence items.", len(new_evidence))
+        summary = f"【执行指令描述】\n{task_desc}\n\n【调查总结与IOC清单】\n{findings}"
+
+        logger.info("Synthesis complete. Structured note generated.")
 
         return {
             "current_raw_logs": None,
             "next_action": None,
-            "evidence_vault": new_evidence,
             "messages": [AIMessage(content=summary)],
         }
 
@@ -555,14 +534,27 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
     new_knowledge = {}
     existing_kb = state.get("mitre_knowledge_base", {})
 
+    # 用于收集在循环中产生的每一条汇报足迹
+    messages_to_append = []
+
     if not technique_ids:
         logger.warning("No MITRE ID found in the instruction: %s", instruction)
+        messages_to_append.append(
+            AIMessage(
+                content="[MITRE Query Info] 指令中未包含有效的 Txxxx 编号，无法执行查询。请重新检查指令。"
+            )
+        )
     else:
         unique_ids = list(set(technique_ids))
 
         for tid in unique_ids:
             if tid in existing_kb:
                 logger.info("MITRE ID %s is already in the global knowledge base. Skipping.", tid)
+                messages_to_append.append(
+                    AIMessage(
+                        content=f"[MITRE Query Info] 战术 {tid} 已存在于底层知识库中，无需重复查询。"
+                    )
+                )
                 continue
 
             logger.info("Obtaining knowledge from MITRE KB for: %s", tid)
@@ -570,18 +562,35 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
                 knowledge = load_mitre(MITRE_KB_FILE_PATH, tid)
                 if knowledge:
                     new_knowledge[tid] = f"--- External Knowledge FOR {tid} ---\n{knowledge}"
+                    messages_to_append.append(
+                        AIMessage(
+                            content=f"[MITRE Query Info] 已成功提取并加载战术 {tid} 的情报，底层知识库已更新。"
+                        )
+                    )
                 else:
                     new_knowledge[tid] = (
                         f"No detailed expert guidelines found for {tid}. Please proceed using your general cybersecurity knowledge."
                     )
+                    messages_to_append.append(
+                        AIMessage(
+                            content=f"[MITRE Query Info] 本地知识库中未找到战术 {tid} 的详细情报。"
+                        )
+                    )
             except Exception as e:
                 logger.error("Error retrieving MITRE KB for %s: %s", tid, e)
                 new_knowledge[tid] = f"Failed to retrieve knowledge for {tid} due to system error."
+                messages_to_append.append(
+                    AIMessage(content=f"[MITRE Query Info] 提取战术 {tid} 时发生系统级异常。")
+                )
 
     if new_knowledge:
-        logger.info("Successfully retrieved knowledge for %s techniques.", tid)
+        logger.info("Successfully retrieved knowledge for %s techniques.", len(new_knowledge))
 
-    return {"mitre_knowledge_base": new_knowledge, "next_action": None}
+    return {
+        "mitre_knowledge_base": new_knowledge,
+        "next_action": None,
+        "messages": messages_to_append,
+    }
 
 
 def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
@@ -589,8 +598,9 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     logger.info("Executing Reporter Node: Formatting the final report...")
 
     next_action = state.get("next_action")
-    evidence_vault = state.get("evidence_vault", [])
     mitre_kb = state.get("mitre_knowledge_base", {})
+    messages = state.get("messages", [])
+    initial_clue = state.get("investigation_clue", "未记录初始线索。")
 
     draft_instruction = (
         next_action.get(
@@ -600,6 +610,16 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         if next_action
         else "Summarize the investigation findings and generate an attack attribution report."
     )
+
+    investigation_notes_list = []
+    for msg in messages:
+        if msg.type == "ai" and "【调查总结与IOC清单】" in msg.content:
+            investigation_notes_list.append(msg.content)
+
+    if investigation_notes_list:
+        investigation_notes = "\n\n---\n\n".join(investigation_notes_list)
+    else:
+        investigation_notes = "No detailed investigation notes found in the history."
 
     skill_data = load_skill(SKILL_FILE_PATH)
     format_rules = (
@@ -611,21 +631,16 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 Your task is to take the raw investigation findings provided by the Forensic Detective and format them into a strict, highly polished Attack Attribution Investigation Report (攻击溯源调查报告).
 
 **CRITICAL RULE 1 (Language)**: You MUST generate the entire final report in Simplified Chinese (简体中文). Please translate the narrative and analysis into natural, professional Chinese cybersecurity terminology. However, you MUST keep exact entities (such as PIDs, IP addresses, exact filenames, ProcessGuids, and specific command-line arguments) in their original format.
-**CRITICAL RULE 2 (Factuality)**: You MUST NOT hallucinate, invent, or add any new facts or PIDs. Use ONLY the information provided in the Evidence Vault.
+**CRITICAL RULE 2 (Factuality)**: You MUST NOT hallucinate, invent, or add any new facts or PIDs. Use ONLY the information provided in the Investigation Notes.
 **CRITICAL RULE 3 (Temporal Accuracy)**: You MUST NOT alter, format, or hallucinate any dates or timestamps. Copy the EXACT timestamps provided in the raw findings.
 **CRITICAL RULE 4 (Zero-Loss Formatting - CRITICAL)**: You MUST preserve ALL granular technical evidence provided by the Detective. You are STRICTLY FORBIDDEN from summarizing or abstracting low-level details. You MUST seamlessly integrate exact technical parameters (e.g., hex codes, ports, registry paths), complete file paths/names, unredacted command-line arguments, and exact entity IDs (PIDs, IPs, Guids) into your professional narrative. Do NOT use vague generalizations like "accessed a process", "dropped malicious files", or "executed a script".
+**CRITICAL RULE 5 (KNOWLEDGE OVERRIDE & AUDIT - ABSOLUTE PRIORITY)**: The Forensic Detective's Investigation Notes represent preliminary analysis. They may occasionally misinterpret native OS behaviors, engine initializations, or benign system noise as malicious tactics. You act as the final QA Auditor. You MUST cross-reference all reported behaviors against the provided `MITRE TACTICS CONTEXT`. If the Detective's qualitative classification conflicts with the specific exclusions, false-positive warnings, or strict definitions outlined in the MITRE KB, the MITRE KB takes absolute precedence. You MUST autonomously correct any misclassifications and apply the MITRE KB's definitive judgment in your final report.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
 """
 
     try:
-        vault_str = (
-            json.dumps(evidence_vault, ensure_ascii=False, indent=2)
-            if evidence_vault
-            else "No concrete evidence extracted."
-        )
-
         if mitre_kb:
             kb_paragraphs = []
             for tid, content in mitre_kb.items():
@@ -640,14 +655,15 @@ Your task is to take the raw investigation findings provided by the Forensic Det
         # )
     except Exception as e:
         logger.error("Error formatting vault or KB: %s", e)
-        vault_str = str(evidence_vault)
         kb_str = str(mitre_kb)
 
     human_prompt = (
+        "### INITIAL TRIGGER (THE STARTING POINT)\n"
+        "{initial_clue}\n\n"
         "### CHIEF PLANNER's DRAFT & NARRATIVE FOCUS\n"
         "{draft_instruction}\n\n"
-        "### EVIDENCE VAULT (THE HARD FACTS - DO NOT LOSE ANY DETAILS)\n"
-        "{vault_str}\n\n"
+        "### INVESTIGATION NOTES (THE HARD FACTS - DO NOT LOSE ANY DETAILS)\n"
+        "{investigation_notes}\n\n"
         "### MITRE TACTICS CONTEXT (For your reference to sound professional)\n"
         "{kb_str}\n\n"
         "Please synthesize the above intelligence and format it exactly according to the requested Report Format."
@@ -663,8 +679,9 @@ Your task is to take the raw investigation findings provided by the Forensic Det
         final_report_msg = reporter_chain.invoke(
             {
                 "format_rules": format_rules,
+                "initial_clue": initial_clue,
                 "draft_instruction": draft_instruction,
-                "vault_str": vault_str,
+                "investigation_notes": investigation_notes,
                 "kb_str": kb_str,
             }
         )
@@ -685,7 +702,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
 
 def user_input_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 7: User Input Node ."""
+    """Node 6: User Input Node ."""
     logger.info("Executing User Input Node (Suspending...)")
 
     next_action = state.get("next_action")

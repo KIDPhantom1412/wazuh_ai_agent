@@ -1,4 +1,3 @@
-import operator
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
@@ -25,9 +24,9 @@ class ActionCommand(BaseModel):
         "Reporter_Node",
         "Decision_Node",
         "Attribution_Planner_Node",
-    ] = Field(description="The target node to route to.")
+    ] = Field(default="Reporter_Node", description="The target node to route to.")
     instruction: str = Field(
-        description="The specific instruction or query to pass to the target node."
+        default="", description="The specific instruction or query to pass to the target node."
     )
 
 
@@ -41,8 +40,8 @@ class AttributionState(TypedDict):
     # 原始日志暂存
     current_raw_logs: list[dict[str, Any]] | None
 
-    # IOC存储
-    evidence_vault: Annotated[list[dict[str, Any]], operator.add]
+    # # IOC存储
+    # evidence_vault: Annotated[list[dict[str, Any]], operator.add]
 
     # 外部知识库
     mitre_knowledge_base: Annotated[dict[str, str], merge_kb]
@@ -50,11 +49,8 @@ class AttributionState(TypedDict):
     # 报告
     final_report: str | None
 
-    # 初始化决策状态变量
+    # 用户自定义配置相关
     investigation_clue: str | None
     is_clue_confirmed: bool | None
     pending_question_type: str | None
-
-    # 可选配置
     requires_mitre_kb: bool | None
-    requires_evaluation: bool | None  # 保留字段 用于评估溯源
