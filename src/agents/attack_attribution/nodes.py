@@ -50,7 +50,7 @@ Nodes:
 1. Attribution_Planner_Node
 2. Log_Retrieval_Node
 3. Information_Synthesizer_Node
-4. MITRE_Expert_Node - optinal
+4. MITRE_Expert_Node - optional
 5. Reporter_Node
 6. User_Input_Node
 """
@@ -143,36 +143,44 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                     }
 
     if is_clue_confirmed and requires_mitre_kb is None:
-        if is_human and pending_type == "MITRE":
-            logger.info("Phase 2: Parsing MITRE response...")
-            system_prompt = "Analyze if user agreed (YES) or declined (NO). Chinese '是/开启' = YES, '否/关闭/不用' = NO. Output strictly 'YES' or 'NO'."
-            prompt = ChatPromptTemplate.from_messages(
-                [("system", system_prompt), ("human", "{user_text}")]
-            )
-            result = (prompt | model).invoke({"user_text": user_text})
-            intent = result.content.strip().upper()
+        return {
+            "requires_mitre_kb": True,
+            "pending_question_type": None,
+            "messages": [
+                AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")
+            ],
+            "next_action": {"target": "Attribution_Planner_Node"},
+        }
+        # if is_human and pending_type == "MITRE":
+        #     logger.info("Phase 2: Parsing MITRE response...")
+        #     system_prompt = "Analyze if user agreed (YES) or declined (NO). Chinese '是/开启' = YES, '否/关闭/不用' = NO. Output strictly 'YES' or 'NO'."
+        #     prompt = ChatPromptTemplate.from_messages(
+        #         [("system", system_prompt), ("human", "{user_text}")]
+        #     )
+        #     result = (prompt | model).invoke({"user_text": user_text})
+        #     intent = result.content.strip().upper()
 
-            if "YES" in intent:
-                return {
-                    "requires_mitre_kb": True,
-                    "pending_question_type": None,
-                    "messages": [AIMessage(content="已开启 MITRE 专家知识库，正在为您深入调查...")],
-                    "next_action": {"target": "Decision_Node"},
-                }
-            else:
-                return {
-                    "requires_mitre_kb": False,
-                    "pending_question_type": None,
-                    "messages": [
-                        AIMessage(content="已关闭 MITRE 专家知识库，将仅根据日志事实进行排查...")
-                    ],
-                    "next_action": {"target": "Decision_Node"},
-                }
-        else:
-            return {
-                "pending_question_type": "MITRE",
-                "next_action": {"target": "User_Input_Node", "instruction": "ASK_MITRE"},
-            }
+        #     if "YES" in intent:
+        #         return {
+        #             "requires_mitre_kb": True,
+        #             "pending_question_type": None,
+        #             "messages": [AIMessage(content="已开启 MITRE 专家知识库，正在为您深入调查...")],
+        #             "next_action": {"target": "Decision_Node"},
+        #         }
+        #     else:
+        #         return {
+        #             "requires_mitre_kb": False,
+        #             "pending_question_type": None,
+        #             "messages": [
+        #                 AIMessage(content="已关闭 MITRE 专家知识库，将仅根据日志事实进行排查...")
+        #             ],
+        #             "next_action": {"target": "Decision_Node"},
+        #         }
+        # else:
+        #     return {
+        #         "pending_question_type": "MITRE",
+        #         "next_action": {"target": "User_Input_Node", "instruction": "ASK_MITRE"},
+        #     }
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {"next_action": {"target": "Attribution_Planner_Node"}}
@@ -217,8 +225,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section at the bottom of this prompt. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
-    parser = PydanticOutputParser(pydantic_object=ActionCommand)
-
     system_prompt = """You are an elite Cybersecurity Chief Attribution Planner.
 Your role is to orchestrate a complex attack forensics investigation. You do NOT query databases directly. Instead, you analyze the intelligence gathered so far and delegate specific tasks to specialized subordinate nodes.
 
@@ -228,7 +234,7 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
   - *Example*: "Investigate PID 6536 on Agent 005 for lateral activities, specifically focusing on File Drops. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
 
 - 'Reporter_Node': Routes to the reporting engine to close the case.
-  - **When to use**: Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence in the vault.
+  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until you have exhaustively investigated EVERY SINGLE suspicious PID discovered. Review your history: if there is any PID where you haven't checked BOTH its origins (Upward trace) AND its subsequent actions (Downward/Lateral trace), you MUST go back and query it. Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence.
   - **How to instruct**: Provide a brief draft/summary of the attack narrative for the reporter to expand upon.
 
 {mitre_instructions}
@@ -249,14 +255,15 @@ Evaluate the initial lead to extract a Process Anchor (PID).
 - **Branch B (Process Leads)**: If the lead is a PID, your FIRST action MUST be to instruct the Log_Retrieval_Node to retrieve its exact `Process Creation` log (Upward). If missing, proceed to Phase 2 with the initial PID.
 
 #### Phase 2: Vertical Expansion Loop (The Causal Tree)
-With a valid Process Anchor, you MUST build its complete execution lineage. For ANY newly discovered suspicious process, perform BOTH:
+With a valid Process Anchor, you MUST build its complete execution lineage. 
+**MANDATORY PID TRACKING RULE**: Every time the Log_Retrieval_Node returns logs containing new PIDs, you must treat them as untested leads. For EVERY SINGLE newly discovered process, you MUST perform BOTH:
 - **Descendant Trace (Downward)**: Instruct the Log_Retrieval_Node to find child `Process Creation` logs.
 - **Ancestor Trace (Upward)**: Instruct the Log_Retrieval_Node to find parent `Process Creation` logs.
-*CRITICAL*: Do not abandon the Downward trace just because you found a new parent. You must ensure BOTH directions are exhausted for EVERY node in your Causal Tree before declaring the tree complete.
+*CRITICAL*: Even if a process's command line perfectly explains its malicious intent, you CANNOT assume it didn't spawn further payload droppers. You MUST explicitly verify its children via a Downward trace.
 
-- **EXHAUSTIVE SEARCH & TRANSITION RULE**: You MUST NOT prematurely transition to Phase 3. You may ONLY transition to Phase 3 when the vertical tree is FULLY exhausted. This requires TWO conditions to be met simultaneously:
-  1. The Upward trace has reached a dead end (origin parent log is missing OR the ancestor is a confirmed legitimate system broker like explorer.exe or svchost.exe).
-  2. The Downward trace confirms that ALL discovered suspicious processes spawned no further unexplored children.
+- **EXHAUSTIVE SEARCH & TRANSITION RULE**: You MUST NOT prematurely transition to Phase 3 or the Reporter_Node. You may ONLY transition when TWO conditions are met simultaneously:
+  1. The Upward trace has reached a dead end or a confirmed legitimate system broker (e.g., explorer.exe).
+  2. **ZERO UNEXPLORED PIDS**: You have actively executed a `Process Creation (Downward)` instruction for EVERY malicious/suspicious PID currently known in your causal tree, and confirmed they spawned no further unexplored children.
 
 #### Phase 3: The Pivot Protocol (Bridging Lineage Breaks)
 When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensional Pivot.
@@ -274,13 +281,13 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
    - You are STRICTLY FORBIDDEN from issuing the EXACT same `instruction` more than once in the entire investigation.
    - If an Upward or Downward trace for a specific PID was already queried, NEVER query it again.
 2. **TIME BOUNDARIES (CRITICAL)**: All backend tools strictly require UTC time. If a time is provided but the timezone is NOT explicitly specified, you MUST default to assuming it is Beijing Time (UTC+8). You MUST manually subtract 8 hours from the provided time to calculate the exact UTC time BEFORE instructing the Log_Retrieval_Node. You MUST pass the complete and exact ISO8601 UTC time boundary in your instructions.
+3. NO CONVERSATION & NO QUESTIONS: You are an autonomous Planner. You are STRICTLY FORBIDDEN from asking the user for permission or advice (e.g., "Should I continue tracing?"). You must make the decision yourself based on the Exhaustive Search rules. Either output an instruction to keep investigating, or output to the Reporter_Node.
+4. STRICT OUTPUT: Your final output MUST contain exactly one action with fields `target` and `instruction`. Do NOT output any prefatory text, conversational filler, or markdown.
 
 ### CURRENT CASE CONTEXT
 
 - **MITRE Knowledge Base**:
 {kb_str}
-
-{format_instructions}
 """
 
     prompt = ChatPromptTemplate.from_messages(
@@ -290,24 +297,76 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
         ]
     )
 
-    chain = prompt | model | parser
-
     try:
+        chain = prompt | model.with_structured_output(ActionCommand)
         result = chain.invoke(
             {
                 "messages": messages,
                 "mitre_instructions": mitre_instructions,
                 "kb_str": kb_str,
-                "format_instructions": parser.get_format_instructions(),
             }
         )
 
-        logger.info("Planner decision successful. Target: %s", result.target)
+        action = result if isinstance(result, ActionCommand) else ActionCommand(**result)
 
-        return {"next_action": {"target": result.target, "instruction": result.instruction}}
+        logger.info("Planner decision successful. Target: %s", action.target)
+
+        return {"next_action": {"target": action.target, "instruction": action.instruction}}
     except Exception as e:
-        logger.error("Error in attribution planner node: %s", e)
-        return {"next_action": None}
+        try:
+            parser = PydanticOutputParser(pydantic_object=ActionCommand)
+            system_prompt_fallback = (
+                system_prompt
+                + "\n\nReturn ONLY one valid JSON object matching this schema:\n"
+                + "{format_instructions}"
+            )
+            prompt_fallback = ChatPromptTemplate.from_messages(
+                [
+                    ("system", system_prompt_fallback),
+                    MessagesPlaceholder(variable_name="messages"),
+                ]
+            )
+            format_instructions = parser.get_format_instructions()
+            llm_msg = (prompt_fallback | model).invoke(
+                {
+                    "messages": messages,
+                    "mitre_instructions": mitre_instructions,
+                    "kb_str": kb_str,
+                    "format_instructions": format_instructions,
+                }
+            )
+
+            raw_text = getattr(llm_msg, "content", llm_msg)
+            try:
+                result = parser.parse(raw_text)
+            except Exception:
+                repair_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "system",
+                            "Convert the input into exactly one valid JSON object matching this schema:\n{format_instructions}",
+                        ),
+                        ("human", "{raw_text}"),
+                    ]
+                )
+                repaired = (repair_prompt | model).invoke(
+                    {"raw_text": raw_text, "format_instructions": format_instructions}
+                )
+                repaired_text = getattr(repaired, "content", repaired)
+                result = parser.parse(repaired_text)
+
+            logger.info("Planner decision successful (fallback). Target: %s", result.target)
+
+            return {
+                "next_action": {"target": result.target, "instruction": result.instruction}
+            }
+        except Exception as fallback_e:
+            logger.error(
+                "Error in attribution planner node. structured_output=%s fallback=%s",
+                e,
+                fallback_e,
+            )
+            return {"next_action": None}
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
