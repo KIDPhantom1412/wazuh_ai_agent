@@ -24,11 +24,12 @@ class ActionCommand(BaseModel):
         "Reporter_Node",
         "Decision_Node",
         "Attribution_Planner_Node",
-    ] = Field(description="The target node to route to.") 
-    
+    ] = Field(description="The target node to route to.")
+
     instruction: str = Field(
         description="The specific instruction or query to pass to the target node. YOU MUST PROVIDE THIS."
     )
+
 
 # 状态定义
 class AttributionState(TypedDict):

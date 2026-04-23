@@ -146,9 +146,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         return {
             "requires_mitre_kb": True,
             "pending_question_type": None,
-            "messages": [
-                AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")
-            ],
+            "messages": [AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")],
             "next_action": {"target": "Attribution_Planner_Node"},
         }
         # if is_human and pending_type == "MITRE":
@@ -255,7 +253,7 @@ Evaluate the initial lead to extract a Process Anchor (PID).
 - **Branch B (Process Leads)**: If the lead is a PID, your FIRST action MUST be to instruct the Log_Retrieval_Node to retrieve its exact `Process Creation` log (Upward). If missing, proceed to Phase 2 with the initial PID.
 
 #### Phase 2: Vertical Expansion Loop (The Causal Tree)
-With a valid Process Anchor, you MUST build its complete execution lineage. 
+With a valid Process Anchor, you MUST build its complete execution lineage.
 **MANDATORY PID TRACKING RULE**: Every time the Log_Retrieval_Node returns logs containing new PIDs, you must treat them as untested leads. For EVERY SINGLE newly discovered process, you MUST perform BOTH:
 - **Descendant Trace (Downward)**: Instruct the Log_Retrieval_Node to find child `Process Creation` logs.
 - **Ancestor Trace (Upward)**: Instruct the Log_Retrieval_Node to find parent `Process Creation` logs.
@@ -357,9 +355,7 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 
             logger.info("Planner decision successful (fallback). Target: %s", result.target)
 
-            return {
-                "next_action": {"target": result.target, "instruction": result.instruction}
-            }
+            return {"next_action": {"target": result.target, "instruction": result.instruction}}
         except Exception as fallback_e:
             logger.error(
                 "Error in attribution planner node. structured_output=%s fallback=%s",

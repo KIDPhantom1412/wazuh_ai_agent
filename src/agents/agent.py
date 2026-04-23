@@ -4,7 +4,6 @@ from langchain_openai import ChatOpenAI
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
-from agents.response_agent import get_response_agent
 from core.config import settings
 
 # 自定义 HTTP 客户端，专门解决 chunked read 报错
@@ -26,5 +25,4 @@ model = ChatOpenAI(
 
 demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
-response_agent = get_response_agent(model)
 attack_attributor = get_attack_attribution_agent(model)

@@ -198,5 +198,88 @@
                 }
             ]
         }
+    },
+    "attribution_archives": {
+        "hits": {
+            "hits": [
+                {
+                    "_source": {
+                        "timestamp": "2026-04-07T18:41:35.042+0800",
+                        "agent": {"id": "005"},
+                        "rule": {
+                            "id": "92213",
+                            "level": 15,
+                            "description": "Executable file dropped in folder commonly used by malware",
+                            "mitre": {
+                                "id": ["T1105"],
+                                "tactic": ["Command and Control"]
+                            }
+                        },
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "11"},
+                                "eventdata": {
+                                    "processId": "2892",
+                                    "image": "C:\\\\Windows\\\\system32\\\\WerFault.exe",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "targetFilename": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\SilentProcessExit\\\\lsass.exe-(PID-712)-18670187\\\\lsass.exe-(PID-712).dmp"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "_source": {
+                        "timestamp": "2026-04-22T14:31:46.371+0800",
+                        "agent": {"id": "005"},
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "7"},
+                                "eventdata": {
+                                    "processId": "1664",
+                                    "image": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "originalFileName": "CertUtil.exe",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "imageLoaded": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "signed": "true"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "_source": {
+                        "timestamp": "2026-04-22T14:31:46.365+0800",
+                        "agent": {"id": "005"},
+                        "rule": {
+                            "id": "92016",
+                            "level": 13,
+                            "description": "Masqueraded CertUtil.exe with a different file name. Possible use to decode malware",
+                            "mitre": {
+                                "id": ["T1036.003", "T1140"],
+                                "tactic": ["Defense Evasion"]
+                            }
+                        },
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "1"},
+                                "eventdata": {
+                                    "processId": "2964",
+                                    "image": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "commandLine": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp  -encode C:\\\\Windows\\\\System32\\\\calc.exe C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\T1140_calc2.txt",
+                                    "parentProcessId": "4436",
+                                    "parentImage": "C:\\\\Windows\\\\System32\\\\cmd.exe",
+                                    "parentCommandLine": "\\\"cmd.exe\\\" /c copy %windir%\\\\system32\\\\certutil.exe %temp%\\\\tcm.tmp &amp; %temp%\\\\tcm.tmp -encode C:\\\\Windows\\\\System32\\\\calc.exe %temp%\\\\T1140_calc2.txt &amp; %temp%\\\\tcm.tmp -decode %temp%\\\\T1140_calc2.txt %temp%\\\\T1140_calc2_decoded.exe",
+                                    "originalFileName": "CertUtil.exe",
+                                    "integrityLevel": "High",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "parentUser": "DESKTOP-NR6HCQ3\\\\defin"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
     }
 }
