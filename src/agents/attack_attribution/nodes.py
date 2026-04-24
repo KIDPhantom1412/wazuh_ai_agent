@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from .log_retrieval_helper import get_archives_by_eventid, get_archives_by_keyword
-from .state import ActionCommand, AttributionState
+from .state import AttributionPlannerActionCommand, AttributionState
 from .utils import load_mitre, load_skill
 
 logger = logging.getLogger(__name__)
@@ -104,24 +104,41 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                 return {
                     "investigation_clue": user_text,
                     "is_clue_confirmed": True,
-                    "next_action": {"target": "Decision_Node"},
+                    "next_action_fromDecisionNode": {"target": "Decision_Node"},
+                    "next_action_fromAttributionPlannerNode": None,
                 }
             else:
                 return {
                     "investigation_clue": analysis,
                     "pending_question_type": "CLUE",
-                    "next_action": {"target": "User_Input_Node", "instruction": "ASK_CLUE"},
+                    "next_action_fromDecisionNode": {
+                        "target": "User_Input_Node",
+                        "instruction": "ASK_CLUE",
+                    },
+                    "next_action_fromAttributionPlannerNode": None,
                 }
         else:
             # 线索已存在，大模型判断用户的回复是同意还是要求修改
             if is_human and pending_type == "CLUE":
                 logger.info("Phase 1: Parsing user feedback on clue...")
                 system_prompt = """You are an intent parsing and rewriting assistant.
-                Current clue: '{clue}'
-                User feedback: '{user_text}'
+                Evaluate the user's feedback regarding the 'Original Clue'.
                 1. If user agrees/confirms (e.g., '是', 'yes', '确认', 'ok'), output exactly 'AGREE'.
-                2. If user wants to modify, rewrite the clue COMPLETELY incorporating their feedback. Output ONLY the new revised clue."""
-                prompt = ChatPromptTemplate.from_messages([("system", system_prompt)])
+                2. If user wants to modify, rewrite the clue COMPLETELY incorporating their feedback. Output ONLY the new revised clue.
+
+                [CRITICAL REWRITE RULES]
+                - ZERO DATA LOSS: You MUST preserve all original details (Agent ID, Rule, PID, filenames, etc.) that the user did NOT ask to change.
+                - NO DELTA OUTPUT: Do NOT just output the user's modifications. You MUST output the full, standalone, readable revised clue.
+                - NO FILLER: Output ONLY the final revised clue text. Do not add phrases like "已修改：" or "Here is the revised clue:".
+
+                [CONTEXT]
+                Original Clue:
+                {clue}
+                """
+
+                prompt = ChatPromptTemplate.from_messages(
+                    [("system", system_prompt), ("human", "{user_text}")]
+                )
                 result = (prompt | model).invoke(
                     {"clue": investigation_clue, "user_text": user_text}
                 )
@@ -131,15 +148,17 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                     return {
                         "is_clue_confirmed": True,
                         "pending_question_type": None,
-                        "next_action": {"target": "Decision_Node"},
+                        "next_action_fromDecisionNode": {"target": "Decision_Node"},
+                        "next_action_fromAttributionPlannerNode": None,
                     }
                 else:
                     return {
                         "investigation_clue": intent,
-                        "next_action": {
+                        "next_action_fromDecisionNode": {
                             "target": "User_Input_Node",
                             "instruction": "ASK_CLUE_MODIFIED",
                         },
+                        "next_action_fromAttributionPlannerNode": None,
                     }
 
     if is_clue_confirmed and requires_mitre_kb is None:
@@ -147,7 +166,8 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             "requires_mitre_kb": True,
             "pending_question_type": None,
             "messages": [AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")],
-            "next_action": {"target": "Attribution_Planner_Node"},
+            "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
+            "next_action_fromAttributionPlannerNode": None,
         }
         # if is_human and pending_type == "MITRE":
         #     logger.info("Phase 2: Parsing MITRE response...")
@@ -181,7 +201,10 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         #     }
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
-    return {"next_action": {"target": "Attribution_Planner_Node"}}
+    return {
+        "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
+        "next_action_fromAttributionPlannerNode": None,
+    }
 
 
 def attribution_planner_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
@@ -296,7 +319,7 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
     )
 
     try:
-        chain = prompt | model.with_structured_output(ActionCommand)
+        chain = prompt | model.with_structured_output(AttributionPlannerActionCommand)
         result = chain.invoke(
             {
                 "messages": messages,
@@ -305,14 +328,24 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
             }
         )
 
-        action = result if isinstance(result, ActionCommand) else ActionCommand(**result)
+        action = (
+            result
+            if isinstance(result, AttributionPlannerActionCommand)
+            else AttributionPlannerActionCommand(**result)
+        )
 
         logger.info("Planner decision successful. Target: %s", action.target)
 
-        return {"next_action": {"target": action.target, "instruction": action.instruction}}
+        return {
+            "next_action_fromDecisionNode": None,
+            "next_action_fromAttributionPlannerNode": {
+                "target": action.target,
+                "instruction": action.instruction,
+            },
+        }
     except Exception as e:
         try:
-            parser = PydanticOutputParser(pydantic_object=ActionCommand)
+            parser = PydanticOutputParser(pydantic_object=AttributionPlannerActionCommand)
             system_prompt_fallback = (
                 system_prompt
                 + "\n\nReturn ONLY one valid JSON object matching this schema:\n"
@@ -355,24 +388,30 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 
             logger.info("Planner decision successful (fallback). Target: %s", result.target)
 
-            return {"next_action": {"target": result.target, "instruction": result.instruction}}
+            return {
+                "next_action_fromDecisionNode": None,
+                "next_action_fromAttributionPlannerNode": {
+                    "target": result.target,
+                    "instruction": result.instruction,
+                },
+            }
         except Exception as fallback_e:
             logger.error(
                 "Error in attribution planner node. structured_output=%s fallback=%s",
                 e,
                 fallback_e,
             )
-            return {"next_action": None}
+            return {"next_action_fromAttributionPlannerNode": None}
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
     """Node 2: Log Retrieval Node"""
     logger.info("Executing Log Retrieval Node")
 
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromAttributionPlannerNode")
     if not next_action or next_action.get("target") != "Log_Retrieval_Node":
         logger.warning("Invalid route to Log Retrieval Node.")
-        return {"current_raw_logs": [], "next_action": None}
+        return {"current_raw_logs": [], "next_action_fromAttributionPlannerNode": None}
 
     instruction = next_action.get("instruction", "")
 
@@ -467,7 +506,7 @@ def information_synthesizer_node(
     logger.info("Executing Information Synthesizer Node")
 
     raw_logs = state.get("current_raw_logs")
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
 
     instruction = (
@@ -478,7 +517,8 @@ def information_synthesizer_node(
         logger.info("No raw logs provided. Skipping synthesis.")
         return {
             "current_raw_logs": None,
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
+            "next_action_fromAttributionPlannerNode": None,
             "messages": [
                 AIMessage(
                     content=f"针对指令”{instruction}』“的查询未返回任何日志数据，该方向线索中断。"
@@ -574,7 +614,8 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
 
         return {
             "current_raw_logs": None,
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
+            "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=summary)],
         }
 
@@ -582,7 +623,8 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
         logger.error("Error during synthesis: %s", e)
         return {
             "current_raw_logs": None,
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
+            "next_action_fromAttributionPlannerNode": None,
             "messages": [
                 AIMessage(
                     content=f"[审查官汇报] 针对指令『{instruction}』的日志解析失败。异常信息: {e}"
@@ -595,8 +637,8 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
     """Node 4: MITRE Expert Node ."""
     logger.info("Executing MITRE Expert Node")
 
-    next_action = state.get("next_action")
-    instruction = next_action.get("instruction", "")
+    next_action = state.get("next_action_fromAttributionPlannerNode")
+    instruction = next_action.get("instruction", "") if next_action else ""
     technique_ids = re.findall(r"T\d{4}(?:\.\d{3})?", instruction.upper())
 
     new_knowledge = {}
@@ -656,7 +698,7 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
 
     return {
         "mitre_knowledge_base": new_knowledge,
-        "next_action": None,
+        "next_action_fromAttributionPlannerNode": None,
         "messages": messages_to_append,
     }
 
@@ -665,7 +707,7 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     """Node 5: Reporter Node."""
     logger.info("Executing Reporter Node: Formatting the final report...")
 
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
     messages = state.get("messages", [])
     initial_clue = state.get("investigation_clue", "未记录初始线索。")
@@ -758,13 +800,13 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
         return {
             "final_report": final_report_msg.content,
-            "next_action": None,
+            "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告已生成完毕。\n\n{final_report_msg.content}")],
         }
     except Exception as e:
         logger.error("Error generating final report: %s", e)
         return {
-            "next_action": None,
+            "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告生成失败，发生异常: {e}")],
         }
 
@@ -773,7 +815,7 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
     """Node 6: User Input Node ."""
     logger.info("Executing User Input Node (Suspending...)")
 
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromDecisionNode")
     instruction = next_action.get("instruction") if next_action else ""
     clue = state.get("investigation_clue", "")
 
@@ -784,7 +826,7 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
                     content=f"系统检测到原始日志输入。我为您提取了如下调查线索：\n\n『{clue}』\n\n请问该线索是否符合您的要求？（如果您同意，请回复“是”；如需修改时间范围等信息，请直接指出）"
                 )
             ],
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
         }
     elif instruction == "ASK_CLUE_MODIFIED":
         return {
@@ -793,7 +835,7 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
                     content=f"已根据您的意见修改线索如下：\n\n『{clue}』\n\n请问现在的线索是否符合您的要求？"
                 )
             ],
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
         }
     elif instruction == "ASK_MITRE":
         return {
@@ -802,7 +844,7 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
                     content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
                 )
             ],
-            "next_action": None,
+            "next_action_fromDecisionNode": None,
         }
 
-    return {"next_action": None}
+    return {"next_action_fromDecisionNode": None}

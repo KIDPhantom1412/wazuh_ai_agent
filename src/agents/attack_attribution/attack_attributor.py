@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def route_decision(state: AttributionState) -> str:
     """decision node 的出口路由"""
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromDecisionNode")
     if not next_action:
         return END
     target = next_action.get("target")
@@ -37,7 +37,7 @@ def route_decision(state: AttributionState) -> str:
 
 def route_planner(state: AttributionState) -> str:
     """attribution_planner_node节点的出口路由"""
-    next_action = state.get("next_action")
+    next_action = state.get("next_action_fromAttributionPlannerNode")
     if not next_action:
         logger.warning(
             "Planner returned no next_action. Ending workflow to prevent infinite loops."

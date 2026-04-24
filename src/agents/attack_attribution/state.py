@@ -16,16 +16,33 @@ def merge_kb(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     return new_kb
 
 
-class ActionCommand(BaseModel):
-    target: Literal[
-        "Log_Retrieval_Node",
-        "MITRE_Expert_Node",
-        "User_Input_Node",
-        "Reporter_Node",
-        "Decision_Node",
-        "Attribution_Planner_Node",
-    ] = Field(description="The target node to route to.")
+# class ActionCommand(BaseModel):
+#     target: Literal[
+#         "Log_Retrieval_Node",
+#         "MITRE_Expert_Node",
+#         "User_Input_Node",
+#         "Reporter_Node",
+#         "Decision_Node",
+#         "Attribution_Planner_Node",
+#     ] = Field(description="The target node to route to.")
 
+#     instruction: str = Field(
+#         default="",
+#         description="The specific instruction or query to pass to the target node.",
+#     )
+
+
+class DecisionActionCommand(BaseModel):
+    target: Literal["User_Input_Node", "Attribution_Planner_Node", "Decision_Node"] = Field(
+        description="The target node to route to from Decision_Node."
+    )
+    instruction: str = Field(default="", description="Optional instruction for the target node.")
+
+
+class AttributionPlannerActionCommand(BaseModel):
+    target: Literal["Log_Retrieval_Node", "MITRE_Expert_Node", "Reporter_Node"] = Field(
+        description="The target node to route to from Attribution_Planner_Node."
+    )
     instruction: str = Field(
         description="The specific instruction or query to pass to the target node. YOU MUST PROVIDE THIS."
     )
@@ -35,8 +52,8 @@ class ActionCommand(BaseModel):
 class AttributionState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
-    # 下一步的调查指令
-    next_action: ActionCommand | None
+    next_action_fromDecisionNode: DecisionActionCommand | None
+    next_action_fromAttributionPlannerNode: AttributionPlannerActionCommand | None
 
     # 原始日志暂存
     current_raw_logs: list[dict[str, Any]] | None
