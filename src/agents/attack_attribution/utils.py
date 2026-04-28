@@ -2,6 +2,8 @@ import logging
 import re
 from pathlib import Path
 
+from wazuh_api.server_api import list_agents
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,6 +85,30 @@ def load_mitre(filepath: str | Path, technique_id: str) -> str:
         return ""
 
 
+def extract_agent_ip_mapping() -> dict[str, str]:
+    """
+    获取 Wazuh Agent ID 与 IP 的映射字典。
+    """
+    ip_mapping = {}
+
+    try:
+        api_response = list_agents()
+        agents = api_response.get("data", {}).get("affected_items", [])
+
+        for agent in agents:
+            agent_id = agent.get("id")
+            agent_ip = agent.get("ip")
+
+            # 过滤掉id=000的情况
+            if agent_id and agent_ip and agent_id != "000":
+                ip_mapping[agent_id] = agent_ip
+
+    except Exception as e:
+        logger.info(f"Exception occurred while extracting Agent IP mapping: {e}")
+
+    return ip_mapping
+
+
 if __name__ == "__main__":
     from pathlib import Path
 
@@ -97,3 +123,6 @@ if __name__ == "__main__":
     technique_id = "T1001"
     external_knowldege = load_mitre(MITRE_KB_FILE_PATH, technique_id)
     print(external_knowldege)
+
+    print("Agent ID -> IP Mapping:")
+    print(extract_agent_ip_mapping())

@@ -20,6 +20,7 @@ class QueryType(str, Enum):
     PORT = "PORT"
     SERVICE_NAME = "SERVICE_NAME"
     USER_ACCOUNT = "USER_ACCOUNT"
+    REGISTRY_PATH = "REGISTRY_PATH"
 
 
 @tool
@@ -155,12 +156,15 @@ def simplify_log(source):
         "sourceUser",
         "targetUser",
         "accountName",
-        # --- 3. 网络通信记录 (Event 3) ---
+        "targetUserName",
+        # --- 3. 网络通信记录 (Event 3, 4624) ---
         "sourceIp",
         "sourcePort",
         "destinationIp",
         "destinationPort",
         "protocol",
+        "ipAddress",
+        "ipPort",
         # --- 4. 文件与模块加载 (Event 7, 11) ---
         "targetFilename",
         "imageLoaded",
@@ -178,6 +182,10 @@ def simplify_log(source):
         "imagePath",
         "serviceType",
         "startType",
+        # --- 7. 注册表行为 (Event 12, 13, 14) ---
+        "eventType",  # 动作类型：如 CreateKey, DeleteKey, SetValue, RenameKey
+        "targetObject",  # 目标对象：被操作的完整注册表路径
+        "details",  # 具体细节：写入注册表的具体值
     ]
 
     eventdata_out = {
@@ -272,12 +280,14 @@ def search_archives_by_eventid(
         type_conditions = [
             {"term": {"data.win.eventdata.sourceIp": val_str}},
             {"term": {"data.win.eventdata.destinationIp": val_str}},
+            {"term": {"data.win.eventdata.ipAddress": val_str}},
         ]
 
     elif query_type == QueryType.PORT:
         type_conditions = [
             {"term": {"data.win.eventdata.sourcePort": val_str}},
             {"term": {"data.win.eventdata.destinationPort": val_str}},
+            {"term": {"data.win.eventdata.ipPort": val_str}},
         ]
 
     elif query_type == QueryType.SERVICE_NAME:
@@ -299,9 +309,17 @@ def search_archives_by_eventid(
                         "data.win.eventdata.sourceUser",
                         "data.win.eventdata.targetUser",
                         "data.win.eventdata.accountName",
+                        "data.win.eventdata.targetUserName",
                     ],
                 }
             }
+        ]
+
+    elif query_type == QueryType.REGISTRY_PATH:
+        # 基于 query_string 实现模糊匹配
+        query_str = f"*{val_str}*"
+        type_conditions = [
+            {"query_string": {"query": query_str, "fields": ["data.win.eventdata.targetObject"]}}
         ]
 
     # 将 OR (should) 逻辑挂载到主查询中
@@ -344,6 +362,7 @@ def get_archives_by_eventid(
         - "PORT"         : 按源或目的网络端口追踪。
         - "SERVICE_NAME" : 按注册的系统服务名称追踪。
         - "USER_ACCOUNT" : 按操作系统用户或服务账号追踪。
+        - "REGISTRY_PATH" : 按注册表路径追踪。
     :param query_value: 【必填】与 query_type 对应的具体数值。样例说明：
         - 若为 PROCESS_ID 或 PARENT_PROCESS_ID: 传入pid "6536"
         - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\"
@@ -351,14 +370,16 @@ def get_archives_by_eventid(
         - 若为 PORT: 传入 "2024"
         - 若为 SERVICE_NAME: 传入"WMI"
         - 若为 USER_ACCOUNT: 传入 "LocalSystem", "Administrator"
-    :param event_ids: 【必填】目标 EventID 列表。请严格根据调查意图选择对应的类别：
-        - ["1"]         : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
-        - ["3"]         : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
-        - ["7"]         : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
-        - ["8", "10"]   : 进程注入与内存访问 (Process Injection & Memory Access) - 用于检测远程线程创建、进程镂空等规避动作。
-        - ["11"]        : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
-        - ["25"]        : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
-        - ["7045"]      : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
+        - 若为 REGISTRY_PATH: 传入 "CurrentControlSet\\Services\\bam" 或 "Run"
+    :param event_ids: 【必填】目标 EventID 列表。请严格根据调查意图在下面给出的类型中选择对应的类别：
+        - ["1"]              : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
+        - ["3","4624"]       : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
+        - ["7"]              : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
+        - ["8", "10"]        : 进程注入与内存访问 (Process Injection & Memory Access) - 用于检测远程线程创建、进程镂空等规避动作。
+        - ["11"]             : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
+        - ["25"]             : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
+        - ["7045"]           : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
+        - ["12", "13", "14"] : 注册表行为 (Registry) - 用于检测注册表修改、删除或创建等操作。
     :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """

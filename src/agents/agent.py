@@ -16,11 +16,19 @@ custom_http_client = httpx.Client(
     )
 )
 
+# model = ChatOpenAI(
+#     model=settings.TEST_LLM_MODEL,
+#     api_key=settings.TEST_LLM_API_KEY,
+#     base_url=settings.TEST_LLM_BASE_URL,
+#     http_client=custom_http_client,
+# )
+
 model = ChatOpenAI(
     model=settings.TEST_LLM_MODEL,
     api_key=settings.TEST_LLM_API_KEY,
     base_url=settings.TEST_LLM_BASE_URL,
     http_client=custom_http_client,
+    model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 
 demo_agent = get_demo_agent(model)

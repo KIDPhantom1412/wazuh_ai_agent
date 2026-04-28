@@ -3744,6 +3744,12 @@ Files can also be transferred using various [Web Service](https://attack.mitre.o
 
 1. **General Detection Strategy**: Monitor relevant process telemetry, command-line arguments, and API calls associated with this behavior.
 
+2. **False Positive Alert - PowerShell Execution Policy Tests (CRITICAL)**:
+   - **Artifact Pattern**: Files named `__PSScriptPolicyTest_*.ps1` or `__PSScriptPolicyTest_*.psm1` created in `%LOCALAPPDATA%\Temp\` or `C:\Users\<user>\AppData\Local\Temp\`.
+   - **Behavior Description**: These are benign temporary artifacts created by `powershell.exe` to verify system execution policies. 
+   - **Audit Rule**: If the investigation notes show that a `powershell.exe` process created these specific files and they are the ONLY evidence for T1105, this activity MUST NOT be classified as "Ingress Tool Transfer" or "Malicious Payload Drop". It should be treated as legitimate system noise.
+   - **Causal Check**: If these files appear during the initialization of a PowerShell session or before a script runs, they are almost certainly policy tests.
+
 ***
 
 ## T1106

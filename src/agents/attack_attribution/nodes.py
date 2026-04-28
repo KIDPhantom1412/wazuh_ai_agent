@@ -12,8 +12,11 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from .log_retrieval_helper import get_archives_by_eventid, get_archives_by_keyword
+from .prompt import attribution_investigation_prompt_long
 from .state import AttributionPlannerActionCommand, AttributionState
 from .utils import load_mitre, load_skill
+
+# from .utils import extract_agent_ip_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,12 @@ class SynthesizedFindings(BaseModel):
         description="""A strict chronological timeline and factual summary of the events.
         CRITICAL ZERO-LOSS RULE: You MUST embed all exact technical Evidence/IOCs directly into this narrative.
         Whenever you mention an event, you MUST include its exact timestamp, exact PID, full absolute file path, unredacted command line, and any related IPs/Ports.
-        DO NOT generalize.
+
+        ### ANTI-HALLUCINATION PROTOCOL (CRITICAL) ###
+        1. GROUNDING RULE: You are STRICTLY FORBIDDEN from inventing, inferring, or generating ANY data (timestamps, PIDs, IPs, filenames, actions) that is not EXPLICITLY present in the provided Raw JSON Logs.
+        2. MISSING EVIDENCE RULE: If the Raw Logs do NOT contain the exact behavior requested in the instruction (e.g., the instruction asks for Process Creation, but logs only show File Creation), you MUST explicitly state the discrepancy.
+        3. NULL RESPONSE RULE: If the Raw Logs are empty, irrelevant, or insufficient to fulfill the instruction, you MUST output EXACTLY: "日志检索结果未包含符合预期的行为证据。发现的孤立事件为：[简述实际发现的内容]。" DO NOT fabricate a story.
+
         ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
         FORMATTING RULE: DO NOT output any title or markdown headers. Just output the pure paragraph content. Must be affirmatively stated in Chinese."""
     )
@@ -65,6 +73,20 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     investigation_clue = state.get("investigation_clue")
     pending_type = state.get("pending_question_type")
     messages = state.get("messages", [])
+    # 多主机场景相关逻辑已按需求暂时注释/禁用
+    multi_host_updates = {}
+    # is_multi_host = state.get("is_multi_host")
+    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
+    # if is_multi_host is None:
+    #     agent_ip_mapping = extract_agent_ip_mapping()
+    #     is_multi_host = len(agent_ip_mapping) > 1
+    # if is_multi_host and not agent_ip_mapping:
+    #     agent_ip_mapping = extract_agent_ip_mapping()
+    #
+    # multi_host_updates = {
+    #     "is_multi_host": is_multi_host,
+    #     "agent_ip_mapping": agent_ip_mapping,
+    # }
 
     last_message = messages[-1] if messages else None
     is_human = last_message.type == "human" if last_message else False
@@ -102,6 +124,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
             if analysis == "READY":
                 return {
+                    **multi_host_updates,
                     "investigation_clue": user_text,
                     "is_clue_confirmed": True,
                     "next_action_fromDecisionNode": {"target": "Decision_Node"},
@@ -109,6 +132,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                 }
             else:
                 return {
+                    **multi_host_updates,
                     "investigation_clue": analysis,
                     "pending_question_type": "CLUE",
                     "next_action_fromDecisionNode": {
@@ -146,6 +170,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
                 if intent.upper() == "AGREE":
                     return {
+                        **multi_host_updates,
                         "is_clue_confirmed": True,
                         "pending_question_type": None,
                         "next_action_fromDecisionNode": {"target": "Decision_Node"},
@@ -153,6 +178,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                     }
                 else:
                     return {
+                        **multi_host_updates,
                         "investigation_clue": intent,
                         "next_action_fromDecisionNode": {
                             "target": "User_Input_Node",
@@ -163,6 +189,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
     if is_clue_confirmed and requires_mitre_kb is None:
         return {
+            **multi_host_updates,
             "requires_mitre_kb": True,
             "pending_question_type": None,
             "messages": [AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")],
@@ -202,6 +229,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {
+        **multi_host_updates,
         "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
         "next_action_fromAttributionPlannerNode": None,
     }
@@ -218,6 +246,14 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
 
     messages = state.get("messages", [])
     mitre_kb = state.get("mitre_knowledge_base", {})
+    # 多主机场景相关逻辑已按需求暂时注释/禁用
+    # is_multi_host = state.get("is_multi_host")
+    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
+    # agent_ip_mapping_str = (
+    #     json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2) if agent_ip_mapping else "{}"
+    # )
+
+    attribution_investigation_prompt: str = attribution_investigation_prompt_long
 
     try:
         if mitre_kb:
@@ -246,70 +282,47 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section at the bottom of this prompt. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
-    system_prompt = """You are an elite Cybersecurity Chief Attribution Planner.
+    multi_host_instructions = ""
+    # if is_multi_host:
+    #     multi_host_instructions = f"""
+    #
+    # ### MULTI-HOST MODE
+    # Agent ID -> IP Mapping (JSON):
+    # {agent_ip_mapping_str}
+    #
+    # Rules:
+    # 1. If you need to pivot by an IP address and that IP exists in the mapping, you MUST translate it into the corresponding Agent ID and query that Agent ID.
+    # 2. If you see evidence that "Agent A" interacted with "IP B" and IP B maps to "Agent B", you MUST pivot and query Agent B in a subsequent step (do NOT stop after only querying Agent A).
+    # 3. You MUST NOT create dead loops. At most one cross-host pivot per planning turn.
+    # """
+
+    system_prompt = (
+        """You are an elite Cybersecurity Chief Attribution Planner.
 Your role is to orchestrate a complex attack forensics investigation. You do NOT query databases directly. Instead, you analyze the intelligence gathered so far and delegate specific tasks to specialized subordinate nodes.
 
 ## YOUR ARSENAL (TARGET NODES)
 - 'Log_Retrieval_Node': Routes to a specialized AI agent equipped with Wazuh API tools.
   - **How to instruct**: Provide clear, natural language instructions detailing *what* you want to find. You MUST explicitly mention *the Agent ID* in your instruction.
   - *Example*: "Investigate PID 6536 on Agent 005 for lateral activities, specifically focusing on File Drops. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
+  - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT automatically translate IP addresses into Agent IDs for you.
 
 - 'Reporter_Node': Routes to the reporting engine to close the case.
   - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until you have exhaustively investigated EVERY SINGLE suspicious PID discovered. Review your history: if there is any PID where you haven't checked BOTH its origins (Upward trace) AND its subsequent actions (Downward/Lateral trace), you MUST go back and query it. Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence.
   - **How to instruct**: Provide a brief draft/summary of the attack narrative for the reporter to expand upon.
 
 {mitre_instructions}
+{multi_host_instructions}
 
-### LOG RETRIEVAL NODE INSTRUCTION RULES
-When routing to the `Log_Retrieval_Node`, your `instruction` string MUST explicitly declare:
-1. **The Investigation Target**: Choose from: numerical `PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, or `USER_ACCOUNT`.
-2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list. The available options are: `Process Creation (Upward)`, `Process Creation (Downward)`, `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Drops`, `Process Tampering`, or `Service Installation`.
-3. **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
-4. **Keyword Searches (Last Resort)**: Use generic keyword searches ONLY when an entity lacks the necessary relational identifiers (PID, IP, etc.) to be queried via the primary behaviors.
-
-### YOUR INVESTIGATION STRATEGY (DYNAMIC HUNTING STATE MACHINE)
-Execute your investigation as a continuous loop through the following phases. Jump back to earlier phases if new actionable evidence emerges:
-
-#### Phase 1: Lead Triage & Anchoring
-Evaluate the initial lead to extract a Process Anchor (PID).
-- **Branch A (Non-Process Leads)**: If the lead is a filename, a service name, or an IP address, you are STRICTLY FORBIDDEN from guessing a PID. Your FIRST action MUST be to instruct the Log_Retrieval_Node to pivot on that target to find the process that generated the artifact.
-- **Branch B (Process Leads)**: If the lead is a PID, your FIRST action MUST be to instruct the Log_Retrieval_Node to retrieve its exact `Process Creation` log (Upward). If missing, proceed to Phase 2 with the initial PID.
-
-#### Phase 2: Vertical Expansion Loop (The Causal Tree)
-With a valid Process Anchor, you MUST build its complete execution lineage.
-**MANDATORY PID TRACKING RULE**: Every time the Log_Retrieval_Node returns logs containing new PIDs, you must treat them as untested leads. For EVERY SINGLE newly discovered process, you MUST perform BOTH:
-- **Descendant Trace (Downward)**: Instruct the Log_Retrieval_Node to find child `Process Creation` logs.
-- **Ancestor Trace (Upward)**: Instruct the Log_Retrieval_Node to find parent `Process Creation` logs.
-*CRITICAL*: Even if a process's command line perfectly explains its malicious intent, you CANNOT assume it didn't spawn further payload droppers. You MUST explicitly verify its children via a Downward trace.
-
-- **EXHAUSTIVE SEARCH & TRANSITION RULE**: You MUST NOT prematurely transition to Phase 3 or the Reporter_Node. You may ONLY transition when TWO conditions are met simultaneously:
-  1. The Upward trace has reached a dead end or a confirmed legitimate system broker (e.g., explorer.exe).
-  2. **ZERO UNEXPLORED PIDS**: You have actively executed a `Process Creation (Downward)` instruction for EVERY malicious/suspicious PID currently known in your causal tree, and confirmed they spawned no further unexplored children.
-
-#### Phase 3: The Pivot Protocol (Bridging Lineage Breaks)
-When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensional Pivot.
-- **Logical Breaks**: If you hit a system broker, extract the service/task name and query for `Service Installation`.
-- **Physical Breaks/Leaf Nodes**: Query the PID for lateral behaviors like `Network Connections`, `File Drops`, or `DLL/Module Loads` to identify C2 or payloads.
-- **Process Injection & Tampering Pivot**: If a benign OS process acts maliciously or exhibits behavior misaligned with its expected function, query it for  `Process Injection` or `Process Tampering` events. Extract the source attacker PID  and return to Phase 2.
-
-#### Phase 4: Contextual Enrichment (Keyword Searches)
-- ONLY AFTER Phases 1, 2, and 3 are fully exhausted, instruct the Log_Retrieval_Node to perform Keyword Searches for missing context.
-- **THE RE-ENTRY PROTOCOL**: If a keyword search reveals a NEW actionable lead, you MUST immediately loop back to Phase 1/Phase 2.
-
-
-### CRITICAL RULES
-1. **ABSOLUTE NO DEAD LOOPS**: You MUST strictly read the conversation history (`messages`).
-   - You are STRICTLY FORBIDDEN from issuing the EXACT same `instruction` more than once in the entire investigation.
-   - If an Upward or Downward trace for a specific PID was already queried, NEVER query it again.
-2. **TIME BOUNDARIES (CRITICAL)**: All backend tools strictly require UTC time. If a time is provided but the timezone is NOT explicitly specified, you MUST default to assuming it is Beijing Time (UTC+8). You MUST manually subtract 8 hours from the provided time to calculate the exact UTC time BEFORE instructing the Log_Retrieval_Node. You MUST pass the complete and exact ISO8601 UTC time boundary in your instructions.
-3. NO CONVERSATION & NO QUESTIONS: You are an autonomous Planner. You are STRICTLY FORBIDDEN from asking the user for permission or advice (e.g., "Should I continue tracing?"). You must make the decision yourself based on the Exhaustive Search rules. Either output an instruction to keep investigating, or output to the Reporter_Node.
-4. STRICT OUTPUT: Your final output MUST contain exactly one action with fields `target` and `instruction`. Do NOT output any prefatory text, conversational filler, or markdown.
+"""
+        + attribution_investigation_prompt
+        + """
 
 ### CURRENT CASE CONTEXT
 
 - **MITRE Knowledge Base**:
 {kb_str}
 """
+    )
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -318,90 +331,59 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
         ]
     )
 
+    parser = PydanticOutputParser(pydantic_object=AttributionPlannerActionCommand)
+    format_instructions = parser.get_format_instructions()
+
     try:
-        chain = prompt | model.with_structured_output(AttributionPlannerActionCommand)
-        result = chain.invoke(
+        llm_msg = (prompt | model).invoke(
             {
                 "messages": messages,
                 "mitre_instructions": mitre_instructions,
+                "multi_host_instructions": multi_host_instructions,
                 "kb_str": kb_str,
+                "format_instructions": format_instructions,
             }
         )
 
-        action = (
-            result
-            if isinstance(result, AttributionPlannerActionCommand)
-            else AttributionPlannerActionCommand(**result)
-        )
+        raw_text = getattr(llm_msg, "content", str(llm_msg))
 
-        logger.info("Planner decision successful. Target: %s", action.target)
+        try:
+            result = parser.parse(raw_text)
+        except Exception as parse_e:
+            logger.warning(
+                "Planner initial parsing failed, triggering repair mechanism. Error: %s", parse_e
+            )
+
+            repair_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Convert the input into exactly one valid JSON object matching this schema.\n"
+                        "CRITICAL OVERRIDE: You MUST NOT wrap the result in a 'properties' dictionary. Return the flat object directly.\n"
+                        "{format_instructions}",
+                    ),
+                    ("human", "{raw_text}"),
+                ]
+            )
+            repaired = (repair_prompt | model).invoke(
+                {"raw_text": raw_text, "format_instructions": format_instructions}
+            )
+            repaired_text = getattr(repaired, "content", str(repaired))
+            result = parser.parse(repaired_text)
+
+        logger.info("Planner decision successful. Target: %s", result.target)
 
         return {
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": {
-                "target": action.target,
-                "instruction": action.instruction,
+                "target": result.target,
+                "instruction": result.instruction,
             },
         }
-    except Exception as e:
-        try:
-            parser = PydanticOutputParser(pydantic_object=AttributionPlannerActionCommand)
-            system_prompt_fallback = (
-                system_prompt
-                + "\n\nReturn ONLY one valid JSON object matching this schema:\n"
-                + "{format_instructions}"
-            )
-            prompt_fallback = ChatPromptTemplate.from_messages(
-                [
-                    ("system", system_prompt_fallback),
-                    MessagesPlaceholder(variable_name="messages"),
-                ]
-            )
-            format_instructions = parser.get_format_instructions()
-            llm_msg = (prompt_fallback | model).invoke(
-                {
-                    "messages": messages,
-                    "mitre_instructions": mitre_instructions,
-                    "kb_str": kb_str,
-                    "format_instructions": format_instructions,
-                }
-            )
 
-            raw_text = getattr(llm_msg, "content", llm_msg)
-            try:
-                result = parser.parse(raw_text)
-            except Exception:
-                repair_prompt = ChatPromptTemplate.from_messages(
-                    [
-                        (
-                            "system",
-                            "Convert the input into exactly one valid JSON object matching this schema:\n{format_instructions}",
-                        ),
-                        ("human", "{raw_text}"),
-                    ]
-                )
-                repaired = (repair_prompt | model).invoke(
-                    {"raw_text": raw_text, "format_instructions": format_instructions}
-                )
-                repaired_text = getattr(repaired, "content", repaired)
-                result = parser.parse(repaired_text)
-
-            logger.info("Planner decision successful (fallback). Target: %s", result.target)
-
-            return {
-                "next_action_fromDecisionNode": None,
-                "next_action_fromAttributionPlannerNode": {
-                    "target": result.target,
-                    "instruction": result.instruction,
-                },
-            }
-        except Exception as fallback_e:
-            logger.error(
-                "Error in attribution planner node. structured_output=%s fallback=%s",
-                e,
-                fallback_e,
-            )
-            return {"next_action_fromAttributionPlannerNode": None}
+    except Exception as final_e:
+        logger.error("Error in attribution planner node: %s", final_e)
+        return {"next_action_fromAttributionPlannerNode": None}
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
@@ -425,12 +407,12 @@ Your primary role is to fetch precise security telemetry, logs, and forensic dat
   If the instruction explicitly asks to search for a general text string, malicious filename, or IP address (e.g., "Search for mimikatz.exe"), you MUST call `get_archives_by_keyword`.
   *ABSOLUTE BAN (CRITICAL)*: You are STRICTLY FORBIDDEN from executing `get_archives_by_keyword` if the instruction requests tracking a numerical `PID` or specific behavior like "File Drops".
 
-- **Scenario B: Specific Behaviors, Process Trees & Lateral Activity**
-  If the instruction asks about process tracking (e.g., "Investigate PID 6536", "Find File Drops"), you MUST call `get_archives_by_eventid`.
+- **Scenario B: Specific Behaviors, Process Trees, Registry activity & Lateral Activity**
+  If the instruction asks about process tracking, registry changes, or file actions, you MUST call `get_archives_by_eventid`.
   - To find the execution details of a process itself (e.g., finding its creation log), use `query_type="PROCESS_ID"` and `event_ids=["1"]`.
   - To find child processes spawned by a specific parent, use `query_type="PARENT_PROCESS_ID"` and `event_ids=["1"]`.
-  - To find lateral activities performed by a process, use `query_type="PROCESS_ID"` with the relevant `event_ids` (e.g., Network=["3"], DLLs=["7"], Injection=["8","10"], File Drops=["11"], Services=["7045"]).
-  - **FILE_PATH Retry Rule**: If you execute a `FILE_PATH` query using a full absolute path (e.g., `C:\\Windows\\System32\\malware.exe`) and the tool returns a `search_feedback` error, you MUST automatically extract just the filename (e.g., `malware.exe`) and execute a SECOND tool call using ONLY the filename as the `query_value` before reporting back.
+  - To find lateral activities: Use relevant `event_ids` (Network Connection=["3","4624"], DLL Loading=["7"], Injection=["8","10"], File Creation=["11"], Registry Modification=["12","13","14"], Service Installation=["7045"].).
+  - **PATH Retry Rule (FILE & REGISTRY)**: If you execute a `FILE_PATH` or `REGISTRY_PATH` query using a full path and the tool returns a `search_feedback` error, you MUST automatically extract the last part of the path (the filename or the specific Key name) and execute a SECOND tool call using ONLY that fragment as the `query_value`.
 
 ### STRICT TOOL ISOLATION (NO FALLBACKS):
 - **NO KEYWORD FALLBACK FOR PIDs**: If the specific process tracking tools return 0 results or a `search_feedback` message for a PID, you MUST simply return that result to the Chief Planner. **DO NOT** attempt to "help" by falling back to `get_archives_by_keyword` to search the PID as a keyword.
@@ -508,6 +490,9 @@ def information_synthesizer_node(
     raw_logs = state.get("current_raw_logs")
     next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
+    # 多主机场景相关逻辑已按需求暂时注释/禁用
+    # is_multi_host = state.get("is_multi_host")
+    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     instruction = (
         next_action.get("instruction", "未命名调查任务") if next_action else "未命名调查任务"
@@ -515,15 +500,15 @@ def information_synthesizer_node(
 
     if not raw_logs:
         logger.info("No raw logs provided. Skipping synthesis.")
+        failure_feedback = f"""
+        针对指令”{instruction}』“的查询未返回任何日志数据，针对该特定维度的线索的查询可能不存在对应的日志。
+        可尝试切换至其他行为类型或者查询条件进行查询日志， 以获取更多相关信息。
+        """
         return {
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
-            "messages": [
-                AIMessage(
-                    content=f"针对指令”{instruction}』“的查询未返回任何日志数据，该方向线索中断。"
-                )
-            ],
+            "messages": [AIMessage(content=failure_feedback)],
         }
 
     try:
@@ -547,6 +532,20 @@ def information_synthesizer_node(
         kb_str = str(mitre_kb)
 
     parser = PydanticOutputParser(pydantic_object=SynthesizedFindings)
+    format_instructions = parser.get_format_instructions()
+
+    multi_host_instructions = ""
+    # if is_multi_host:
+    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
+    #     multi_host_instructions = f"""
+    #
+    # ### MULTI-HOST MODE (CRITICAL)
+    # You MUST use the Agent ID -> IP mapping to translate IP addresses into Agent IDs when describing cross-host activity. If an IP appears in the logs and exists in the mapping, you MUST explicitly mention the mapped Agent ID.
+    #
+    # ### MULTI-HOST CONTEXT
+    # - **Agent ID -> IP Mapping (JSON)**:
+    # {agent_ip_mapping_str}
+    # """
 
     system_prompt = """You are an elite Cybersecurity Information Synthesizer.
 Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, extract exact Indicators of Compromise (IOCs), and write a definitive tactical summary for the Chief Planner.
@@ -568,10 +567,14 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
 4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., avoid "possibly", "might have").
 5. **LANGUAGE**: The `summary` field MUST be written in Chinese".
 
+### Lineage-Based Handle Audit
+When analyzing 0x1fffff (PROCESS_ALL_ACCESS) access masks, you must verify the process relationship. If the Source process is the Parent of the Target process (e.g., a shell managing child utilities), classify the event as "Normal child process management." Strictly avoid mischaracterizing this native Windows behavior as process injection, credential dumping, or unauthorized control.
+
 ### CONTEXT
 - **Original Instruction**: {instruction}
 - **MITRE Knowledge**:
 {kb_str}
+{multi_host_instructions}
 
 {format_instructions}
 """
@@ -583,30 +586,47 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
         ]
     )
 
-    chain = prompt | model | parser
-
     try:
         logger.info("Synthesizing %d logs...", len(raw_logs))
 
-        result = chain.invoke(
+        llm_msg = (prompt | model).invoke(
             {
                 "instruction": instruction,
                 "kb_str": kb_str,
+                "multi_host_instructions": multi_host_instructions,
                 "logs_str": logs_str,
-                "format_instructions": parser.get_format_instructions(),
+                "format_instructions": format_instructions,
             }
         )
 
-        task_desc = (
-            result.task_description
-            if hasattr(result, "task_description")
-            else result.get("task_description", "未提取到指令")
-        )
-        findings = (
-            result.detailed_findings
-            if hasattr(result, "detailed_findings")
-            else result.get("detailed_findings", "解析完成，未发现异常。")
-        )
+        raw_text = getattr(llm_msg, "content", str(llm_msg))
+
+        try:
+            result = parser.parse(raw_text)
+        except Exception as parse_e:
+            logger.warning(
+                "Initial parsing failed, triggering repair mechanism. Error: %s", parse_e
+            )
+
+            repair_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Convert the input into exactly one valid JSON object matching this schema.\n"
+                        "CRITICAL OVERRIDE: You MUST NOT wrap the result in a 'properties' dictionary. Return the flat object directly.\n"
+                        "{format_instructions}",
+                    ),
+                    ("human", "{raw_text}"),
+                ]
+            )
+            repaired_msg = (repair_prompt | model).invoke(
+                {"raw_text": raw_text, "format_instructions": format_instructions}
+            )
+            repaired_text = getattr(repaired_msg, "content", str(repaired_msg))
+            result = parser.parse(repaired_text)
+
+        task_desc = getattr(result, "task_description", "未提取到指令")
+        findings = getattr(result, "detailed_findings", "解析完成，未发现异常。")
 
         summary = f"【执行指令描述】\n{task_desc}\n\n【调查总结与IOC清单】\n{findings}"
 
@@ -620,7 +640,7 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
         }
 
     except Exception as e:
-        logger.error("Error during synthesis: %s", e)
+        logger.error("Error during synthesis (even after repair): %s", e)
         return {
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
@@ -711,6 +731,9 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     mitre_kb = state.get("mitre_knowledge_base", {})
     messages = state.get("messages", [])
     initial_clue = state.get("investigation_clue", "未记录初始线索。")
+    # 多主机场景相关逻辑已按需求暂时注释/禁用
+    # is_multi_host = state.get("is_multi_host")
+    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     draft_instruction = (
         next_action.get(
@@ -737,6 +760,19 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         or "Please generate a structured and professional forensic report."
     )
 
+    multi_host_instructions = ""
+    multi_host_section = ""
+    # if is_multi_host:
+    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
+    #     multi_host_instructions = f"""
+    #
+    # **CRITICAL RULE 6 (MULTI-HOST MAPPING)**: You MUST use the provided Agent ID -> IP mapping to translate any referenced IP addresses into the corresponding Agent IDs in your narrative (e.g., "10.0.0.2 (Agent 002)"). Do NOT invent mappings.
+    # """
+    #     multi_host_section = (
+    #         "### MULTI-HOST MODE\n"
+    #         f"Agent ID -> IP Mapping (JSON):\n{agent_ip_mapping_str}\n\n"
+    #     )
+
     reporter_system_prompt = """You are a highly professional Cyber Security Technical Writer.
 Your task is to take the raw investigation findings provided by the Forensic Detective and format them into a strict, highly polished Attack Attribution Investigation Report (攻击溯源调查报告).
 
@@ -748,6 +784,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
+{multi_host_instructions}
 """
 
     try:
@@ -770,6 +807,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
     human_prompt = (
         "### INITIAL TRIGGER (THE STARTING POINT)\n"
         "{initial_clue}\n\n"
+        "{multi_host_section}"
         "### CHIEF PLANNER's DRAFT & NARRATIVE FOCUS\n"
         "{draft_instruction}\n\n"
         "### INVESTIGATION NOTES (THE HARD FACTS - DO NOT LOSE ANY DETAILS)\n"
@@ -790,6 +828,8 @@ Your task is to take the raw investigation findings provided by the Forensic Det
             {
                 "format_rules": format_rules,
                 "initial_clue": initial_clue,
+                "multi_host_instructions": multi_host_instructions,
+                "multi_host_section": multi_host_section,
                 "draft_instruction": draft_instruction,
                 "investigation_notes": investigation_notes,
                 "kb_str": kb_str,

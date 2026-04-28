@@ -69,3 +69,6 @@ class AttributionState(TypedDict):
     is_clue_confirmed: bool | None
     pending_question_type: str | None
     requires_mitre_kb: bool | None
+    ## 是否启动多主机场景
+    is_multi_host: bool | None
+    agent_ip_mapping: dict[str, str] | None
