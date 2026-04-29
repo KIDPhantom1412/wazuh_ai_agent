@@ -375,7 +375,8 @@ def get_archives_by_eventid(
         - ["1"]              : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
         - ["3","4624"]       : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
         - ["7"]              : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
-        - ["8", "10"]        : 进程注入与内存访问 (Process Injection & Memory Access) - 用于检测远程线程创建、进程镂空等规避动作。
+        - ["8"]              : 进程注入行为 (Process Injection) - 用于检测 CreateRemoteThread 等跨进程的高危代码注入或执行规避动作。
+        - ["10"]             : 进程访问行为(Process Access) - 用于检测一个进程尝试打开另一个进程句柄以进行内存读写或状态控制的行为。
         - ["11"]             : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
         - ["25"]             : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
         - ["7045"]           : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。

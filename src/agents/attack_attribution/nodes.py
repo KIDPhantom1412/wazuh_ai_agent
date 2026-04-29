@@ -33,6 +33,16 @@ MITRE_KB_FILE_PATH = (
 )
 
 
+class InitialClueAnalysis(BaseModel):
+    is_ready: bool = Field(
+        description="如果输入是直接可用的完整线索（无需用户确认），为 true。如果输入是原始日志，或用户正在要求修改线索（尚未明确同意），必须为 false。"
+    )
+    agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。若未找到则留空。")
+    start_time_utc8: str = Field(description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。")
+    end_time_utc8: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
+    refined_clue: str = Field(description="专业中文攻击线索描述（包含北京时间）。")
+
+
 class SynthesizedFindings(BaseModel):
     task_description: str = Field(
         description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
@@ -65,7 +75,7 @@ Nodes:
 
 
 def decision_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 0: Decision Node (The Brain for Initialization)."""
+    """Node 0: Decision Node."""
     logger.info("Executing Decision Node...")
 
     is_clue_confirmed = state.get("is_clue_confirmed")
@@ -73,6 +83,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     investigation_clue = state.get("investigation_clue")
     pending_type = state.get("pending_question_type")
     messages = state.get("messages", [])
+
     # 多主机场景相关逻辑已按需求暂时注释/禁用
     multi_host_updates = {}
     # is_multi_host = state.get("is_multi_host")
@@ -92,10 +103,13 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     is_human = last_message.type == "human" if last_message else False
     user_text = last_message.content if is_human else ""
 
+    parser = PydanticOutputParser(pydantic_object=InitialClueAnalysis)
+    format_instructions = parser.get_format_instructions()
+
     if not is_clue_confirmed:
         if not investigation_clue:
-            # 判断是原始日志还是现成线索
             logger.info("Phase 1: Analyzing initial input...")
+
             system_prompt = """
             You are a Cybersecurity Triage Expert.
             Analyze the user's input: is it a raw JSON/System log, or a clear natural language attack clue?
@@ -105,27 +119,58 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             Example of a valid clue: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:10 到 14:20 之间。"
 
             [INSTRUCTIONS]
-            1. If it is ALREADY a clear natural language clue, output exactly 'READY'.
-            2. If it is a raw log, extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese. Output ONLY the new clue. Do NOT output 'READY'.
+            1. Determine the input type and set the `is_ready` boolean:
+               - ONLY set `is_ready` to true if the input is ALREADY a fully mature, clear natural language clue that requires no further user confirmation.
+               - If the input is a raw log, JSON, or requires any rewriting, you MUST set `is_ready` to false.
+            2. Generate the `refined_clue` string:
+               - If the input was a raw log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese.
+               - If the input was ALREADY a natural language clue: Polish it slightly for professional tone, ensuring it retains all original facts.
             3. TIME WINDOW & ZONE RULE (CRITICAL):
-               When generating the time boundary from a raw log, you MUST perform the following steps exactly:
-               - (Timezone Normalization): Normalize the raw log timestamp into Beijing Time (UTC+8). If the log is in UTC (e.g., ends with 'Z'), you must manually add 8 hours. If it already contains "+0800" or lacks a timezone, treat it as Beijing Time.
-               - (Window Calculation): Create a 10-minute investigation window centered around this normalized Beijing Time. Calculate the start time by subtracting 5 minutes, and the end time by adding 5 minutes. (For example, if the log's actual time is 10:16:35, your time boundary MUST be from 10:11:35 to 10:21:35).
-               - (Formatting): In ALL cases, you MUST explicitly append "（北京时间）" to the final time boundary in your generated clue.
-            4. Output ONLY the newly generated clue. Do NOT output 'READY' if you generated a clue.
+               - (Timezone Normalization): Normalize the raw timestamp into Beijing Time (UTC+8). If the log is in UTC (e.g., ends with 'Z'), you must manually add 8 hours. If it already contains "+0800" or lacks a timezone, treat it as Beijing Time.
+               - (Window Calculation): Create a 10-minute investigation window (+/- 5 mins) around the log time. Calculate the start time by subtracting 5 minutes, and the end time by adding 5 minutes. (For example, if the log's actual time is 10:16:35, your time boundary MUST be from 10:11:35 to 10:21:35).
+               - Output this window directly into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format (e.g., '2026-04-27T17:15:00+08:00'). DO NOT convert to UTC.
+               - (Formatting): In ALL cases, you MUST explicitly append "（北京时间）" to the time boundary in your generated 'refined_clue'.
 
+            {format_instructions}
             """
 
             prompt = ChatPromptTemplate.from_messages(
                 [("system", system_prompt), ("human", "{user_text}")]
             )
-            result = (prompt | model).invoke({"user_text": user_text})
-            analysis = result.content.strip()
 
-            if analysis == "READY":
+            llm_msg = (prompt | model).invoke(
+                {"user_text": user_text, "format_instructions": format_instructions}
+            )
+            raw_text = getattr(llm_msg, "content", str(llm_msg))
+
+            try:
+                analysis = parser.parse(raw_text)
+            except Exception as parse_e:
+                logger.warning(
+                    "Phase 1 parsing failed, triggering repair mechanism. Error: %s", parse_e
+                )
+                repair_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "system",
+                            "Convert the input into exactly one valid JSON object matching this schema.\nCRITICAL OVERRIDE: Return the flat object directly.\n{format_instructions}",
+                        ),
+                        ("human", "{raw_text}"),
+                    ]
+                )
+                repaired = (repair_prompt | model).invoke(
+                    {"raw_text": raw_text, "format_instructions": format_instructions}
+                )
+                repaired_text = getattr(repaired, "content", str(repaired))
+                analysis = parser.parse(repaired_text)
+
+            if analysis.is_ready:
                 return {
                     **multi_host_updates,
-                    "investigation_clue": user_text,
+                    "investigation_clue": analysis.refined_clue,
+                    "default_agent_id": analysis.agent_id,
+                    "default_start_time": analysis.start_time_utc8,
+                    "default_end_time": analysis.end_time_utc8,
                     "is_clue_confirmed": True,
                     "next_action_fromDecisionNode": {"target": "Decision_Node"},
                     "next_action_fromAttributionPlannerNode": None,
@@ -133,7 +178,10 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             else:
                 return {
                     **multi_host_updates,
-                    "investigation_clue": analysis,
+                    "investigation_clue": analysis.refined_clue,
+                    "default_agent_id": analysis.agent_id,
+                    "default_start_time": analysis.start_time_utc8,
+                    "default_end_time": analysis.end_time_utc8,
                     "pending_question_type": "CLUE",
                     "next_action_fromDecisionNode": {
                         "target": "User_Input_Node",
@@ -142,9 +190,9 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                     "next_action_fromAttributionPlannerNode": None,
                 }
         else:
-            # 线索已存在，大模型判断用户的回复是同意还是要求修改
             if is_human and pending_type == "CLUE":
-                logger.info("Phase 1: Parsing user feedback on clue...")
+                logger.info("Parsing user feedback on clue...")
+
                 system_prompt = """You are an intent parsing and rewriting assistant.
                 Evaluate the user's feedback regarding the 'Original Clue'.
                 1. If user agrees/confirms (e.g., '是', 'yes', '确认', 'ok'), output exactly 'AGREE'.
@@ -177,9 +225,42 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                         "next_action_fromAttributionPlannerNode": None,
                     }
                 else:
+                    logger.info("User modified clue. Re-extracting default parameters...")
+                    extract_prompt = ChatPromptTemplate.from_messages(
+                        [
+                            (
+                                "system",
+                                "Extract the Agent ID, start_time_utc8, and end_time_utc8 from the following revised clue. You MUST set is_ready to False. Place the revised clue verbatim into refined_clue.\n{format_instructions}",
+                            ),
+                            ("human", "{intent}"),
+                        ]
+                    )
+                    extract_msg = (extract_prompt | model).invoke(
+                        {"intent": intent, "format_instructions": format_instructions}
+                    )
+                    raw_text = getattr(extract_msg, "content", str(extract_msg))
+
+                    try:
+                        analysis = parser.parse(raw_text)
+                    except Exception:
+                        repair_prompt = ChatPromptTemplate.from_messages(
+                            [
+                                ("system", "Convert to valid JSON.\n{format_instructions}"),
+                                ("human", "{raw_text}"),
+                            ]
+                        )
+                        repaired = (repair_prompt | model).invoke(
+                            {"raw_text": raw_text, "format_instructions": format_instructions}
+                        )
+                        analysis = parser.parse(getattr(repaired, "content", str(repaired)))
+
                     return {
                         **multi_host_updates,
                         "investigation_clue": intent,
+                        "default_agent_id": analysis.agent_id,
+                        "default_start_time": analysis.start_time_utc8,
+                        "default_end_time": analysis.end_time_utc8,
+                        "is_clue_confirmed": False,
                         "next_action_fromDecisionNode": {
                             "target": "User_Input_Node",
                             "instruction": "ASK_CLUE_MODIFIED",
@@ -196,36 +277,6 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
             "next_action_fromAttributionPlannerNode": None,
         }
-        # if is_human and pending_type == "MITRE":
-        #     logger.info("Phase 2: Parsing MITRE response...")
-        #     system_prompt = "Analyze if user agreed (YES) or declined (NO). Chinese '是/开启' = YES, '否/关闭/不用' = NO. Output strictly 'YES' or 'NO'."
-        #     prompt = ChatPromptTemplate.from_messages(
-        #         [("system", system_prompt), ("human", "{user_text}")]
-        #     )
-        #     result = (prompt | model).invoke({"user_text": user_text})
-        #     intent = result.content.strip().upper()
-
-        #     if "YES" in intent:
-        #         return {
-        #             "requires_mitre_kb": True,
-        #             "pending_question_type": None,
-        #             "messages": [AIMessage(content="已开启 MITRE 专家知识库，正在为您深入调查...")],
-        #             "next_action": {"target": "Decision_Node"},
-        #         }
-        #     else:
-        #         return {
-        #             "requires_mitre_kb": False,
-        #             "pending_question_type": None,
-        #             "messages": [
-        #                 AIMessage(content="已关闭 MITRE 专家知识库，将仅根据日志事实进行排查...")
-        #             ],
-        #             "next_action": {"target": "Decision_Node"},
-        #         }
-        # else:
-        #     return {
-        #         "pending_question_type": "MITRE",
-        #         "next_action": {"target": "User_Input_Node", "instruction": "ASK_MITRE"},
-        #     }
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {
@@ -259,7 +310,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
         if mitre_kb:
             kb_paragraphs = []
             for tid, content in mitre_kb.items():
-                kb_paragraphs.append(f"【{tid}】\n{content}")
+                kb_paragraphs.append(f"【{tid}】 \n{content}")
             kb_str = "\n\n".join(kb_paragraphs)
         else:
             kb_str = "No external knowledge retrieved yet."
@@ -320,6 +371,7 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
 ### CURRENT CASE CONTEXT
 
 - **MITRE Knowledge Base**:
+
 {kb_str}
 """
     )
@@ -395,11 +447,16 @@ def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: B
         logger.warning("Invalid route to Log Retrieval Node.")
         return {"current_raw_logs": [], "next_action_fromAttributionPlannerNode": None}
 
+    # 读取默认参数
+    default_agent = state.get("default_agent_id", "未知")
+    default_start = state.get("default_start_time", "未知")
+    default_end = state.get("default_end_time", "未知")
+
     instruction = next_action.get("instruction", "")
 
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
-    system_prompt = """You are an elite Data Access & API Agent for the Wazuh Indexer.
+    system_prompt = f"""You are an elite Data Access & API Agent for the Wazuh Indexer.
 Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents and human users.
 
 ### TOOL SELECTION LOGIC (STRICT ADHERENCE):
@@ -432,12 +489,19 @@ You are exclusively a raw data retrieval pipeline. You MUST adhere strictly to t
 1. **ZERO HALLUCINATION**: You MUST NOT generate, simulate, or mock any JSON data.
 2. **ZERO MODIFICATION**: When the tool returns the JSON logs, you MUST NOT summarize, filter, analyze, or explain them.
 3. **NO RETRIES ON EMPTY DATA (ABSOLUTE RULE)**: You are a single-shot execution agent (except for the FILE_PATH retry rule above).
-   - If `get_archives_by_eventid` returns a JSON indicating no logs were found (e.g., `{"search_feedback": ...}`), your job is DONE.
+   - If `get_archives_by_eventid` returns a JSON indicating no logs were found (e.g., `{{"search_feedback": ...}}`), your job is DONE.
    - DO NOT remove or expand the time boundaries to search historical data.
    - IMMEDIATELY stop thinking and output the exact `search_feedback` message.
 4. **RESPONSE FORMAT**:
    - **If data is found**: Respond with a brief confirmation (e.g., "Data successfully retrieved and passed to the next node.") and immediately stop. Leave all analysis to the Information Synthesizer node.
    - **If no data is found**: Output the `search_feedback` message and stop. Leave the tactical pivot decisions to the Chief Planner.
+
+### Query DEFAULT VALUES (CRITICAL):
+If the Planner's instruction does NOT explicitly include an Agent ID and/or a time range, you MUST use the following default values when calling tools:
+(CRITICAL OVERRIDE: The default times provided below are strictly in Beijing Time / UTC+8)
+- Default Agent ID: {default_agent}
+- Default Start Time: {default_start}
+- Default End Time: {default_end}
 """
 
     agent = create_agent(model, tools, system_prompt=system_prompt)
@@ -566,6 +630,11 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
    *NEVER generalize into vague actions like "accessed a process", "modified the registry", or "dropped files".*
 4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., avoid "possibly", "might have").
 5. **LANGUAGE**: The `summary` field MUST be written in Chinese".
+
+### DATA EVALUATION RULES (CRITICAL)
+1. **TRUST THE TIME**: The provided logs have already passed strict backend time filtering. You MUST NOT calculate timestamps or exclude any log for being "out of bounds" or "outside the time range."
+2. **FILTER BY RELEVANCE**: While all logs are temporally valid, you must evaluate their relevance to the attack. You SHOULD exclude or deprioritize logs that are clearly normal system background noise unrelated to the investigation intent.
+3. **REPORTING**: Present event times in Beijing Time (UTC+8). Do not comment on whether a log fits the requested time boundaries; focus entirely on its security implications and relationship to the attack trace.
 
 ### Lineage-Based Handle Audit
 When analyzing 0x1fffff (PROCESS_ALL_ACCESS) access masks, you must verify the process relationship. If the Source process is the Parent of the Target process (e.g., a shell managing child utilities), classify the event as "Normal child process management." Strictly avoid mischaracterizing this native Windows behavior as process injection, credential dumping, or unauthorized control.

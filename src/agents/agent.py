@@ -10,25 +10,17 @@ from core.config import settings
 custom_http_client = httpx.Client(
     timeout=httpx.Timeout(
         connect=30.0,
-        read=180.0,  # 将读取超时延长至 3 分钟，给足大模型输出溯源报告的时间
+        read=180.0,  # 将读取超时延长至 3 分钟，给足大模型输出的时间
         write=30.0,
         pool=30.0,
     )
 )
-
-# model = ChatOpenAI(
-#     model=settings.TEST_LLM_MODEL,
-#     api_key=settings.TEST_LLM_API_KEY,
-#     base_url=settings.TEST_LLM_BASE_URL,
-#     http_client=custom_http_client,
-# )
 
 model = ChatOpenAI(
     model=settings.TEST_LLM_MODEL,
     api_key=settings.TEST_LLM_API_KEY,
     base_url=settings.TEST_LLM_BASE_URL,
     http_client=custom_http_client,
-    model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 
 demo_agent = get_demo_agent(model)

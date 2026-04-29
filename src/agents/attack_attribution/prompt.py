@@ -49,8 +49,8 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 attribution_investigation_prompt_long = """
 ### LOG RETRIEVAL NODE INSTRUCTION RULES
 When routing to the `Log_Retrieval_Node`, your `instruction` string MUST explicitly declare:
-1. **The Investigation Target**: Choose from: numerical `PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT` or `REGISTRY_PATH`.
-2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list. The available options are: `Process Creation (Upward)` (to search for the parent process), `Process Creation (Downward)`(to search for child processes spawned by the target), `Network Connections`, `DLL/Module Loads`, `Process Injection`, `File Creation`, `Registry Modifications (Create/Delete/Set) `, `Process Tampering`, or `Service Installation`.
+1. **The Investigation Target**: You MUST choose EXACTLY ONE target type per instruction from: numerical `PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`, or `REGISTRY_PATH`. You are STRICTLY FORBIDDEN from combining multiple types or passing multiple values in a single query (e.g., querying a PID and a FILE_PATH at the same time is ILLEGAL).
+2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list. The available options are: `Process Creation (Upward)` (to search for the parent process), `Process Creation (Downward)`(to search for child processes spawned by the target), `Network Connections`, `DLL/Module Loads`, `Process Injection`, `Process Access`, `File Creation`, `Registry Modifications (Create/Delete/Set) `, `Process Tampering`, or `Service Installation`.
 3. **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
 4. **Keyword Searches (Last Resort)**: Use generic keyword searches ONLY when an entity lacks the necessary relational identifiers (PID, IP, etc.) to be queried via the primary behaviors.
 
@@ -72,7 +72,7 @@ If your current focus is a valid PID, you MUST build its complete execution line
 When a vertical trace breaks or reaches a leaf node, perform a Multi-Dimensional Pivot on the PID:
 - **Logical Breaks**: If you hit a system broker (e.g., explorer.exe) or suspect the attack is persistent, extract the service name, scheduled task path, or associated Registry Key and query for Service Installation or Registry Modifications (Create/Delete/Set). This helps bridge the gap between a standalone process and its persistence mechanism.
 - **Physical Breaks/Leaf Nodes**: Query the PID for lateral behaviors like `Network Connections`, `File Creation`, `Registry Modifications (Create/Delete/Set) `, `DLL/Module Loads` to identify C2 or payloads.
-- **Process Injection & Tampering**: If a benign OS process acts maliciously or exhibits behavior misaligned with its expected function, query it for `Process Injection` or `Process Tampering` events to extract the source attacker PID and resume tracking.
+- **Inter-Process Anomalies (Injection, Tampering & Access):**: If a standard parent-child trace fails or a process exhibits anomalous behavior, query for `Process Injection`, `Process Tampering`, or `Process Access`. These queries map unauthorized memory interactions and execution boundaries, allowing you to identify hidden orchestrators, uncover compromised vessels, and expose stealthy state control to reconstruct fractured attack chains.
 
 #### 4. Contextual Enrichment
 - Use Keyword Searches ONLY when entity-based queries (PID, IP) are fully exhausted.

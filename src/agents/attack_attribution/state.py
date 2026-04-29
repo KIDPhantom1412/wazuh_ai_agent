@@ -72,3 +72,10 @@ class AttributionState(TypedDict):
     ## 是否启动多主机场景
     is_multi_host: bool | None
     agent_ip_mapping: dict[str, str] | None
+
+    ## 日志查询默认参数
+    default_start_time: str = Field(
+        description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。"
+    )
+    default_end_time: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
+    default_agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。")
