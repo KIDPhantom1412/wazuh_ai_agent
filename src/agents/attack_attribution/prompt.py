@@ -48,18 +48,45 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 
 attribution_investigation_prompt_long = """
 ### LOG RETRIEVAL NODE INSTRUCTION RULES
-When routing to the `Log_Retrieval_Node`, your `instruction` string MUST explicitly declare:
-1. **The Investigation Target**: You MUST choose EXACTLY ONE target type per instruction from: numerical `PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`, or `REGISTRY_PATH`. You are STRICTLY FORBIDDEN from combining multiple types or passing multiple values in a single query (e.g., querying a PID and a FILE_PATH at the same time is ILLEGAL).
-2. **The Behavior Type**: Explicitly state WHICH type of behavior you want the node to investigate. Choose ONLY ONE option from the following list. The available options are: `Process Creation (Upward)` (to search for the parent process), `Process Creation (Downward)`(to search for child processes spawned by the target), `Network Connections`, `DLL/Module Loads`, `Process Injection`, `Process Access`, `File Creation`, `Registry Modifications (Create/Delete/Set) `, `Process Tampering`, or `Service Installation`.
-3. **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
-4. **Keyword Searches (Last Resort)**: Use generic keyword searches ONLY when an entity lacks the necessary relational identifiers (PID, IP, etc.) to be queried via the primary behaviors.
+When routing to the `Log_Retrieval_Node`, your `instruction` string MUST be extremely clear. Unless you are performing a generic Keyword Search, you MUST explicitly declare BOTH the **Investigation Target** and the **Behavior Type**. 
+
+**DEFINITIONS:**
+- **Investigation Target**: The specific entity parameter you are querying. You MUST choose EXACTLY ONE parameter type from (`PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`, or `REGISTRY_PATH`) AND provide its specific value (e.g., "PID 6536" or "IP_ADDRESS 192.168.1.100").
+- **Behavior Type**: The specific category of system event you want to analyze (e.g., `Process Creation (Upward)` or `Network Connections`).
+
+### STRICT PARAMETER MAPPING
+To prevent invalid API queries and eliminate backend search errors, you MUST STRICTLY match your **Investigation Target** parameter to the **Behavior Type** requested. You are STRICTLY FORBIDDEN from using parameters not explicitly listed for a specific behavior below:
+
+**1. Process Execution & Tampering**
+- `Process Creation (Upward)`: MUST use `PID`, `FILE_PATH`, or `USER_ACCOUNT`.
+- `Process Creation (Downward)`: MUST use `PID`, `FILE_PATH`, or `USER_ACCOUNT`.
+- `Process Tampering`: MUST use `PID`, `FILE_PATH`, or `USER_ACCOUNT`.
+
+**2. Network & Communications**
+- `Network Connections`: MUST use `PID`, `IP_ADDRESS`, `PORT`, `FILE_PATH`  or `USER_ACCOUNT`.
+
+**3. Cross-Process Activity (Memory/Handles)**
+- `Process Injection`: MUST use `PID` , `FILE_PATH` or `USER_ACCOUNT`.
+- `Process Access`: MUST use `PID` , `FILE_PATH`, or `USER_ACCOUNT`.
+
+**4. File, Module & Artifacts**
+- `File Creation`: MUST use `PID`, `FILE_PATH` , or `USER_ACCOUNT`.
+- `DLL/Module Loads`: MUST use `PID`, `FILE_PATH`  or `USER_ACCOUNT`.
+
+**5. Persistence & Configuration**
+- `Registry Modifications (Create/Delete/Set)`: MUST use `PID`, `REGISTRY_PATH`, `FILE_PATH` , or `USER_ACCOUNT`.
+- `Service Installation`: MUST use `SERVICE_NAME`, `FILE_PATH` , or `USER_ACCOUNT`.
+
+#### CRITICAL EXCEPTIONS & RULES
+- **Keyword Searches (Last Resort)**: If you need to search for a general text string, malicious filename, or IP address without restricting it to a specific event type, specify a "Keyword Search". **Keyword searches DO NOT require a Behavior Type and accept any raw string as the target.** Use this ONLY when specific entity-based queries fail to yield results.
+- **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
 
 
 ### YOUR INVESTIGATION STRATEGY (DYNAMIC HUNTING HEURISTICS)
 Always evaluate the most recent actionable entity from the conversation history and dynamically apply the appropriate heuristic below. You do not need to follow a strict linear order; let the evidence guide your next move.
 
 #### 1. Artifact Resolution (Non-Process Leads)
-If your current focus is an artifact (e.g., filename, service name, IP address), you are STRICTLY FORBIDDEN from guessing a PID. Your immediate action MUST be to pivot on that artifact (e.g., query `File Drops` or `Network Connections`) to identify the exact Process/PID that generated or interacted with it.
+If your current focus is an artifact (e.g., filename, service name, IP address), you are STRICTLY FORBIDDEN from guessing a PID. Your immediate action MUST be to pivot on that artifact (e.g., query `File Creation` or `Network Connections`) to identify the exact Process/PID that generated or interacted with it.
 - **UNRESOLVED ARTIFACT FALLBACK**: If the Log_Retrieval_Node returns no actionable logs and you absolutely cannot resolve the artifact to a PID, DO NOT get stuck in a loop. Document the artifact as an isolated Indicator of Compromise (IOC), abandon this specific dead-end lead, and immediately move on to the next available suspicious entity in your history.
 
 #### 2. Vertical Expansion (The Causal Tree)
