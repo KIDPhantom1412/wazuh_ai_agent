@@ -3,8 +3,7 @@ import logging
 import re
 import time
 import xml.etree.ElementTree as ET
-from copy import deepcopy
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -23,6 +22,8 @@ from wazuh_api.server_api import (
     delete_rule_file,
     get_agents_overview,
     get_config_agentless,
+    get_manager_logs,
+    get_rule_info,
     get_wazuh_server_api_info,
     restart_manager,
     run_logtest,
@@ -31,28 +32,6 @@ from wazuh_api.server_api import (
 )
 
 logger = logging.getLogger(__name__)
-_debug_log_dir = Path(__file__).parents[3] / "logs"
-_debug_log_dir.mkdir(parents=True, exist_ok=True)
-_verification_debug_logger = logging.getLogger("rule_generator.verification_debug")
-if not _verification_debug_logger.handlers:
-    _verification_file_handler = logging.FileHandler(
-        _debug_log_dir / "rule_verification_debug.log",
-        encoding="utf-8",
-    )
-    _verification_file_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    )
-    _verification_debug_logger.addHandler(_verification_file_handler)
-_verification_debug_logger.setLevel(logging.DEBUG)
-_verification_debug_logger.propagate = False
-
-
-def _verification_debug(event: str, payload: Any):
-    try:
-        serialized = json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        serialized = str(payload)
-    _verification_debug_logger.debug("%s | %s", event, serialized)
 
 
 def _normalize_rule_xml(content: str) -> str:
@@ -73,6 +52,17 @@ def _pretty_rule_xml(content: str) -> str:
         return ET.tostring(root, encoding="unicode")
     except Exception:
         return normalized
+
+
+def _extract_xml_block(text: str) -> str:
+    normalized = _normalize_rule_xml(text)
+    if not normalized:
+        return ""
+
+    xml_match = re.search(r"<group\b[\s\S]*</group>", normalized)
+    if xml_match:
+        return xml_match.group(0).strip()
+    return normalized
 
 
 def _upload_successful(upload_resp: Any) -> bool:
@@ -96,6 +86,164 @@ def _extract_rule_ids(xml_content: str) -> list[int]:
         return []
     ids = re.findall(r'<rule\s+id="(\d+)"', xml_content)
     return [int(item) for item in ids]
+
+
+def _extract_generated_rule_metadata(xml_content: str) -> tuple[int, str]:
+    normalized = _normalize_rule_xml(xml_content)
+    if not normalized:
+        raise ValueError("Generated XML is empty.")
+
+    root = ET.fromstring(normalized)
+    first_rule = root.find(".//rule")
+    if first_rule is None:
+        raise ValueError("Generated XML does not contain any <rule> element.")
+
+    rule_id_raw = first_rule.attrib.get("id")
+    if not rule_id_raw or not rule_id_raw.isdigit():
+        raise ValueError("Generated XML does not contain a valid numeric rule id.")
+
+    description_node = first_rule.find("description")
+    description = ""
+    if description_node is not None and description_node.text:
+        description = description_node.text.strip()
+
+    return int(rule_id_raw), description
+
+
+def _extract_referenced_rule_ids(xml_content: str) -> dict[str, list[int]]:
+    normalized = _normalize_rule_xml(xml_content)
+    if not normalized:
+        return {}
+
+    root = ET.fromstring(normalized)
+    references: dict[str, list[int]] = {}
+    for tag_name in ("if_sid", "if_matched_sid"):
+        values: list[int] = []
+        for node in root.findall(f".//{tag_name}"):
+            text = (node.text or "").strip()
+            if not text:
+                continue
+            values.extend(int(item) for item in re.findall(r"\d+", text))
+        if values:
+            references[tag_name] = sorted(set(values))
+    return references
+
+
+def _rule_exists(rule_id: int) -> bool:
+    rule_info = get_rule_info(rule_id)
+    if not isinstance(rule_info, dict):
+        return False
+    affected_items = rule_info.get("data", {}).get("affected_items", [])
+    if not isinstance(affected_items, list):
+        return False
+    for item in affected_items:
+        if isinstance(item, dict) and str(item.get("id")) == str(rule_id):
+            return True
+    return False
+
+
+def _extract_manager_log_items(logs_resp: Any) -> list[dict[str, Any]]:
+    if not isinstance(logs_resp, dict):
+        return []
+    data = logs_resp.get("data")
+    if isinstance(data, dict):
+        items = data.get("affected_items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def _format_manager_log_entry(item: dict[str, Any]) -> str:
+    timestamp = item.get("timestamp") or item.get("date") or ""
+    tag = item.get("tag") or item.get("component") or ""
+    level = item.get("level") or ""
+    description = item.get("description") or item.get("message") or item.get("log") or ""
+    return " | ".join(part for part in [str(timestamp), str(tag), str(level), str(description)] if part).strip()
+
+
+def _parse_manager_log_timestamp(item: dict[str, Any]) -> datetime | None:
+    raw_timestamp = item.get("timestamp") or item.get("date")
+    if not raw_timestamp or not isinstance(raw_timestamp, str):
+        return None
+
+    normalized = raw_timestamp.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _get_server_utc_timestamp() -> datetime | None:
+    try:
+        api_info = get_wazuh_server_api_info()
+    except Exception as exc:
+        logger.warning(f"Failed to query Wazuh server time: {exc}")
+        return None
+
+    if not isinstance(api_info, dict):
+        return None
+
+    raw_timestamp = api_info.get("data", {}).get("timestamp")
+    if not raw_timestamp or not isinstance(raw_timestamp, str):
+        return None
+
+    normalized = raw_timestamp.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        logger.warning(f"Invalid Wazuh server timestamp format: {raw_timestamp}")
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _find_rule_load_issues(
+    filename: str,
+    rule_ids: set[int],
+    log_items: list[dict[str, Any]],
+    not_before: datetime | None = None,
+) -> list[str]:
+    issues: list[str] = []
+    lowered_filename = filename.lower() if filename else ""
+
+    for item in log_items:
+        item_timestamp = _parse_manager_log_timestamp(item)
+        if not_before and item_timestamp and item_timestamp < not_before:
+            continue
+
+        haystacks = [
+            str(item.get("description", "")),
+            str(item.get("message", "")),
+            str(item.get("log", "")),
+            str(item.get("tag", "")),
+            str(item.get("level", "")),
+        ]
+        combined = " ".join(haystacks).lower()
+        matched_rule_id = any(f"rule '{rid}'" in combined or f"rule {rid}" in combined for rid in rule_ids)
+        matched_filename = lowered_filename in combined if lowered_filename else False
+
+        if matched_rule_id or matched_filename:
+            issues.append(_format_manager_log_entry(item))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for issue in issues:
+        if issue and issue not in seen:
+            seen.add(issue)
+            deduped.append(issue)
+    return deduped
 
 
 def _collect_scalar_fields(obj: Any, prefix: str = "", limit: int = 12) -> dict[str, Any]:
@@ -127,47 +275,53 @@ def _collect_scalar_fields(obj: Any, prefix: str = "", limit: int = 12) -> dict[
 
 def _ensure_json_compatible_rules(xml_content: str) -> tuple[str, list[int]]:
     normalized = _normalize_rule_xml(xml_content)
-    if not normalized:
-        return normalized, []
-    try:
-        root = ET.fromstring(normalized)
-    except Exception:
-        return normalized, []
-
-    existing_ids: set[int] = set()
-    created_json_ids: list[int] = []
-    for rule in root.findall(".//rule"):
-        rid = rule.attrib.get("id")
-        if rid and rid.isdigit():
-            existing_ids.add(int(rid))
-    next_id = (max(existing_ids) + 1) if existing_ids else 110001
-
-    for parent in root.iter():
-        children = list(parent)
-        for child in children:
-            if child.tag != "rule":
-                continue
-            decoded_node = child.find("decoded_as")
-            if decoded_node is None:
-                continue
-            decoded_value = (decoded_node.text or "").strip().lower()
-            if not decoded_value or decoded_value == "json":
-                continue
-
-            cloned_rule = deepcopy(child)
-            cloned_decoded_node = cloned_rule.find("decoded_as")
-            if cloned_decoded_node is not None:
-                cloned_decoded_node.text = "json"
-            while next_id in existing_ids:
-                next_id += 1
-            cloned_rule.attrib["id"] = str(next_id)
-            existing_ids.add(next_id)
-            created_json_ids.append(next_id)
-            next_id += 1
-            insert_pos = list(parent).index(child) + 1
-            parent.insert(insert_pos, cloned_rule)
-
-    return ET.tostring(root, encoding="unicode"), created_json_ids
+    # Intentionally disabled for now.
+    # We keep the previous implementation below for possible future reuse, but
+    # the current workflow must not auto-clone rules into decoded_as=json
+    # variants during verification.
+    #
+    # if not normalized:
+    #     return normalized, []
+    # try:
+    #     root = ET.fromstring(normalized)
+    # except Exception:
+    #     return normalized, []
+    #
+    # existing_ids: set[int] = set()
+    # created_json_ids: list[int] = []
+    # for rule in root.findall(".//rule"):
+    #     rid = rule.attrib.get("id")
+    #     if rid and rid.isdigit():
+    #         existing_ids.add(int(rid))
+    # next_id = (max(existing_ids) + 1) if existing_ids else 110001
+    #
+    # for parent in root.iter():
+    #     children = list(parent)
+    #     for child in children:
+    #         if child.tag != "rule":
+    #             continue
+    #         decoded_node = child.find("decoded_as")
+    #         if decoded_node is None:
+    #             continue
+    #         decoded_value = (decoded_node.text or "").strip().lower()
+    #         if not decoded_value or decoded_value == "json":
+    #             continue
+    #
+    #         cloned_rule = deepcopy(child)
+    #         cloned_decoded_node = cloned_rule.find("decoded_as")
+    #         if cloned_decoded_node is not None:
+    #             cloned_decoded_node.text = "json"
+    #         while next_id in existing_ids:
+    #             next_id += 1
+    #         cloned_rule.attrib["id"] = str(next_id)
+    #         existing_ids.add(next_id)
+    #         created_json_ids.append(next_id)
+    #         next_id += 1
+    #         insert_pos = list(parent).index(child) + 1
+    #         parent.insert(insert_pos, cloned_rule)
+    #
+    # return ET.tostring(root, encoding="unicode"), created_json_ids
+    return normalized, []
 
 
 def _compact_agents_overview(agents_overview: Any) -> dict[str, Any]:
@@ -320,12 +474,6 @@ class FeasibilityCheck(BaseModel):
     log_features: str = Field(description="Extracted log features relevant to the rule")
 
 
-class GeneratedRule(BaseModel):
-    xml_content: str = Field(description="The generated Wazuh rule XML content")
-    rule_id: int = Field(description="The ID of the generated rule")
-    description: str = Field(description="Description of the rule")
-
-
 class LogSelection(BaseModel):
     selected_indices: list[int] = Field(
         description="Indices of logs most likely to trigger the generated rule, ordered by confidence."
@@ -343,6 +491,20 @@ class RouterDecision(BaseModel):
         "unknown",
     ] = Field(
         description="The next step to take based on user input and current state. Use 'extract_requirements' to generate a new rule or modify the current one."
+    )
+
+
+class CleanupTarget(BaseModel):
+    rule_id: int | None = Field(
+        default=None, description="The rule ID the user wants to delete, if explicitly mentioned."
+    )
+    filename: str | None = Field(
+        default=None,
+        description="The exact rule filename the user wants to delete, if explicitly mentioned.",
+    )
+    use_current_state_rule: bool = Field(
+        default=False,
+        description="Whether the user is clearly referring to the currently generated/applied rule in the conversation context.",
     )
 
 
@@ -408,6 +570,22 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         return {
             "decision": "extract_requirements",
             "user_input_history": user_input_history,
+            # Reset stale state before starting a fresh generation flow.
+            "missing_parameters": None,
+            "logs_preview": [],
+            "raw_logs": [],
+            "log_analysis": None,
+            "is_feasible": None,
+            "infeasibility_reason": None,
+            "generated_rule": None,
+            "verification_rule_content": None,
+            "temp_json_rule_ids": [],
+            "rule_id": None,
+            "rule_filename": None,
+            "validation_error": None,
+            "last_validation_error": None,
+            "logtest_passed": None,
+            "verification_feedback": None,
         }
 
     parser = PydanticOutputParser(pydantic_object=RouterDecision)
@@ -819,7 +997,7 @@ If no relevant logs are found or data is insufficient, return feasible=False and
             "raw_logs": raw_logs,
             "log_analysis": enriched_analysis,
             "is_feasible": result.is_feasible,
-            "infeasibility_reason": result.reason,
+            "infeasibility_reason": None if result.is_feasible else result.reason,
         }
 
     except Exception as e:
@@ -865,25 +1043,56 @@ def rule_generation_node(
         """Load Wazuh rule syntax skill content by skill name."""
         return load_skill.invoke(skill_name)
 
+    @tool
+    def query_rule_by_id(rule_id: int) -> str:
+        """Query an existing Wazuh rule by ID before choosing a new rule id or referencing if_sid/if_matched_sid."""
+        try:
+            rule_info = get_rule_info(rule_id)
+        except Exception as exc:
+            return f"lookup_failed: rule_id={rule_id}; error={exc}"
+
+        affected_items = []
+        if isinstance(rule_info, dict):
+            affected_items = rule_info.get("data", {}).get("affected_items", [])
+        if not isinstance(affected_items, list) or not affected_items:
+            return f"rule_id={rule_id}; exists=false"
+
+        first_item = next((item for item in affected_items if isinstance(item, dict)), None)
+        if not first_item:
+            return f"rule_id={rule_id}; exists=false"
+
+        return json.dumps(
+            {
+                "rule_id": rule_id,
+                "exists": True,
+                "description": first_item.get("description"),
+                "level": first_item.get("level"),
+                "groups": first_item.get("groups"),
+                "filename": first_item.get("filename"),
+            },
+            ensure_ascii=False,
+        )
+
     try:
         system_prompt = f"""You are a Wazuh Rule Generator Agent.
 Generate a valid Wazuh XML rule from requirements and log analysis.
 You should use the load_rule_skill tool to fetch needed syntax knowledge.
+You should use the query_rule_by_id tool to verify rule IDs before using them.
 Available skill names: {skill_names_text}
 If previous validation error exists, fix it in the new output.
 You must use the provided raw_logs as primary evidence.
 The generated rule conditions must match real fields/values that actually exist in raw_logs.
 Do not invent nonexistent field paths or values.
-Output must be strict JSON only:
-{{
-  "xml_content": "<group ...>...</group>",
-  "rule_id": 110001,
-  "description": "..."
-}}
-No markdown."""
+Do not use the <decoded_as> element anywhere in the generated rule.
+Before choosing a new rule id, query candidate IDs and only use one that does not already exist.
+If you choose to use any rule reference such as <if_sid> or <if_matched_sid>, query that rule id first and only use confirmed existing IDs.
+Output must be XML only.
+Return exactly one valid Wazuh rule XML block rooted at <group>.
+Do not wrap the XML in JSON.
+Do not add explanations, comments, or markdown fences."""
         generation_agent = create_agent(
             model=model,
-            tools=[load_rule_skill],
+            tools=[load_rule_skill, query_rule_by_id],
             system_prompt=system_prompt,
         )
         generation_result = generation_agent.invoke(
@@ -910,40 +1119,51 @@ No markdown."""
         result_text = ""
         if generation_result.get("messages"):
             result_text = generation_result["messages"][-1].content or ""
-        result_payload: dict[str, Any] = {}
-        if isinstance(result_text, str):
-            raw_text = result_text.strip()
-            if raw_text.startswith("```"):
-                raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.DOTALL)
-            try:
-                result_payload = json.loads(raw_text)
-            except Exception:
-                json_match = re.search(r"\{[\s\S]*\}", raw_text)
-                if json_match:
-                    result_payload = json.loads(json_match.group(0))
+        generated_xml = _extract_xml_block(result_text if isinstance(result_text, str) else "")
+        rule_id, rule_description = _extract_generated_rule_metadata(generated_xml)
+        if _rule_exists(rule_id):
+            raise ValueError(f"Generated rule id {rule_id} already exists in the loaded manager ruleset.")
 
-        result = GeneratedRule.model_validate(result_payload)
+        referenced_rule_ids = _extract_referenced_rule_ids(generated_xml)
+        missing_references: list[str] = []
+        for ref_tag, ref_ids in referenced_rule_ids.items():
+            for ref_id in ref_ids:
+                if not _rule_exists(ref_id):
+                    missing_references.append(f"{ref_tag}={ref_id}")
+        if missing_references:
+            raise ValueError(
+                "Generated rule references non-existent rule ids: " + ", ".join(missing_references)
+            )
 
-        xml_with_json_compat, temp_json_rule_ids = _ensure_json_compatible_rules(result.xml_content)
-        pretty_xml = _pretty_rule_xml(result.xml_content)
+        xml_with_json_compat, temp_json_rule_ids = _ensure_json_compatible_rules(generated_xml)
+        pretty_xml = _pretty_rule_xml(generated_xml)
         verification_pretty_xml = _pretty_rule_xml(xml_with_json_compat)
-        filename = f"test_rule_{result.rule_id}.xml"
+        filename = f"test_rule_{rule_id}.xml"
 
         return {
             "generated_rule": pretty_xml,
             "verification_rule_content": verification_pretty_xml,
             "temp_json_rule_ids": temp_json_rule_ids,
-            "rule_id": result.rule_id,
+            "rule_id": rule_id,
             "rule_filename": filename,
             "iteration_count": state.get("iteration_count", 0) + 1,
             "validation_error": None,
             "last_validation_error": validation_error or None,
             "logtest_passed": None,
-            "verification_feedback": None,
+            "verification_feedback": rule_description or None,
         }
     except Exception as e:
         logger.error(f"Error generating rule: {e}")
-        return {"validation_error": f"Error generating rule: {str(e)}"}
+        return {
+            "generated_rule": None,
+            "verification_rule_content": None,
+            "temp_json_rule_ids": [],
+            "rule_id": None,
+            "rule_filename": None,
+            "logtest_passed": None,
+            "verification_feedback": None,
+            "validation_error": f"Error generating rule: {str(e)}",
+        }
 
 
 def rule_verification_node(
@@ -966,21 +1186,13 @@ def rule_verification_node(
 
     try:
         normalized_verification_content = _normalize_rule_xml(verification_content)
-        _verification_debug(
-            "verification.upload_rule_content",
-            {
-                "filename": filename,
-                "rule_id": rule_id,
-                "expected_rule_ids": sorted(expected_rule_ids),
-                "verification_rule_content": normalized_verification_content,
-            },
-        )
         upload_resp = upload_rule_file(filename, normalized_verification_content, overwrite=True)
         if not _upload_successful(upload_resp):
             return {
                 "validation_error": f"Upload failed: {json.dumps(upload_resp, ensure_ascii=False)}"
             }
 
+        restart_started_at = _get_server_utc_timestamp()
         restart_resp = restart_manager()
         if restart_resp.get("error") and restart_resp.get("error") != 0:
             return {"validation_error": f"Restart failed: {restart_resp}"}
@@ -1006,6 +1218,59 @@ def rule_verification_node(
                 "validation_error": f"Configuration validation failed after waiting for manager restart: {val_resp}"
             }
 
+        rule_load_issues: list[str] = []
+        rule_loaded = False
+        logs_exception = ""
+        rule_info_exception = ""
+        for _ in range(10):
+            time.sleep(1)
+            try:
+                rule_info = get_rule_info(rule_id) if isinstance(rule_id, int) else {}
+                affected_items = (
+                    rule_info.get("data", {}).get("affected_items", [])
+                    if isinstance(rule_info, dict)
+                    else []
+                )
+                rule_loaded = any(
+                    isinstance(item, dict) and int(item.get("id", -1)) == rule_id
+                    for item in affected_items
+                    if isinstance(item, dict)
+                )
+                rule_info_exception = ""
+            except Exception as e:
+                rule_info_exception = str(e)
+
+            try:
+                logs_resp = get_manager_logs(limit=100, tag="wazuh-analysisd")
+                log_items = _extract_manager_log_items(logs_resp)
+                rule_load_issues = _find_rule_load_issues(
+                    filename, expected_rule_ids, log_items, not_before=restart_started_at
+                )
+                logs_exception = ""
+            except Exception as e:
+                logs_exception = str(e)
+
+            if rule_load_issues or rule_loaded:
+                break
+
+        if rule_load_issues:
+            concise_issues = rule_load_issues[:5]
+            return {
+                "validation_error": "Manager loaded the ruleset with warnings/errors related to the uploaded rule file: "
+                + " || ".join(concise_issues)
+            }
+
+        if isinstance(rule_id, int) and not rule_loaded:
+            extra_context = []
+            if rule_info_exception:
+                extra_context.append(f"rule_info_exception={rule_info_exception}")
+            if logs_exception:
+                extra_context.append(f"logs_exception={logs_exception}")
+            extra_text = f" ({'; '.join(extra_context)})" if extra_context else ""
+            return {
+                "validation_error": f"Rule {rule_id} was not found in the loaded manager ruleset after restart{extra_text}."
+            }
+
         raw_logs = state.get("raw_logs", [])
         if not raw_logs:
             return {"validation_error": "No raw logs available for logtest."}
@@ -1023,15 +1288,6 @@ def rule_verification_node(
         if not candidate_logs:
             return {"validation_error": "No usable raw full_log entries available for logtest."}
 
-        _verification_debug(
-            "verification.selected_candidate_logs",
-            {
-                "selected_mode": "raw_logs_without_llm_selection",
-                "candidate_count": len(candidate_logs),
-                "candidate_raw_logs_count": len(candidate_logs),
-            },
-        )
-
         last_output = {}
         attempted = 0
         matched_ids: list[str] = []
@@ -1040,29 +1296,12 @@ def rule_verification_node(
             attempted += 1
             location = candidate.get("location")
             location_value = location if isinstance(location, str) and location.strip() else None
-            _verification_debug(
-                "verification.logtest_request",
-                {
-                    "attempted": attempted,
-                    "sample_log": candidate,
-                    "location": location_value,
-                    "log_line": log_line,
-                },
-            )
 
             try:
                 logtest_resp = run_logtest(log_line, location=location_value)
                 logger.info(f"Logtest response: {json.dumps(logtest_resp, ensure_ascii=False)}")
-                _verification_debug(
-                    "verification.logtest_response",
-                    {"attempted": attempted, "response": logtest_resp},
-                )
             except Exception as e:
                 logger.error(f"Logtest API call failed: {e}")
-                _verification_debug(
-                    "verification.logtest_exception",
-                    {"attempted": attempted, "error": str(e)},
-                )
                 continue
 
             # Parse response structure more carefully
@@ -1095,7 +1334,7 @@ def rule_verification_node(
             if matched_id_int is not None and matched_id_int in expected_rule_ids:
                 return {
                     "logtest_passed": True,
-                    "verification_feedback": f"Logtest passed! Matched rule ID: {matched_id}. Expected IDs: {sorted(expected_rule_ids)}. Tried {attempted} sample log(s). JSON compatibility rules are kept on manager.",
+                    "verification_feedback": f"Logtest passed! Matched rule ID: {matched_id}. Expected IDs: {sorted(expected_rule_ids)}. Tried {attempted} sample log(s).",
                 }
 
         failure_details = {
@@ -1115,19 +1354,98 @@ def rule_verification_node(
         return {"validation_error": f"Verification process error: {str(e)}"}
 
 
-def cleanup_rule_node(state: RuleGeneratorState, config: RunnableConfig):
+def _resolve_rule_filename_from_id(rule_id: int) -> str | None:
+    try:
+        rule_info = get_rule_info(rule_id)
+    except Exception as exc:
+        logger.error(f"Failed to resolve filename for rule {rule_id}: {exc}")
+        return None
+
+    if not isinstance(rule_info, dict):
+        return None
+    affected_items = rule_info.get("data", {}).get("affected_items", [])
+    if not isinstance(affected_items, list):
+        return None
+
+    for item in affected_items:
+        if not isinstance(item, dict):
+            continue
+        filename = item.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+    return None
+
+
+def cleanup_rule_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
     """Cleanup rule if user rejects."""
     logger.info("Executing Cleanup Rule Node")
-    filename = state.get("rule_filename")
+    messages = state.get("messages", [])
+    user_input = messages[-1].content if messages else ""
+    current_rule_id = state.get("rule_id")
+    current_filename = state.get("rule_filename")
+
+    parser = PydanticOutputParser(pydantic_object=CleanupTarget)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You extract which Wazuh rule file the user wants to delete.
+
+Current conversation state:
+- current_rule_id: {current_rule_id}
+- current_rule_filename: {current_filename}
+
+Instructions:
+- Extract `rule_id` if the user explicitly mentions a rule ID.
+- Extract `filename` if the user explicitly mentions a rule filename.
+- Set `use_current_state_rule=true` only if the user is clearly referring to the currently generated/applied rule in context, even without repeating the id or filename.
+- Do not invent IDs or filenames.
+
+{format_instructions}""",
+            ),
+            ("human", "{user_input}"),
+        ]
+    )
+
+    try:
+        extraction = (prompt | model | parser).invoke(
+            {
+                "current_rule_id": current_rule_id,
+                "current_filename": current_filename,
+                "user_input": user_input,
+                "format_instructions": parser.get_format_instructions(),
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error extracting cleanup target: {e}")
+        return {"verification_feedback": f"Error parsing cleanup target: {e}"}
+
+    filename = extraction.filename.strip() if isinstance(extraction.filename, str) and extraction.filename.strip() else None
+    rule_id = extraction.rule_id if isinstance(extraction.rule_id, int) else None
+
+    if not filename and rule_id is not None:
+        filename = _resolve_rule_filename_from_id(rule_id)
+
+    if not filename and extraction.use_current_state_rule and isinstance(current_filename, str):
+        filename = current_filename.strip() or None
+        if rule_id is None and isinstance(current_rule_id, int):
+            rule_id = current_rule_id
+
     if filename:
         try:
             delete_rule_file(filename)
             restart_manager()
-            return {"verification_feedback": "Rule file deleted and manager restarted."}
+            target_text = f"filename={filename}"
+            if rule_id is not None:
+                target_text += f", rule_id={rule_id}"
+            return {"verification_feedback": f"Rule file deleted and manager restarted. ({target_text})"}
         except Exception as e:
             logger.error(f"Error in cleanup: {e}")
-            return {"verification_feedback": f"Error cleaning up: {e}"}
-    return {"verification_feedback": "No rule file to clean up."}
+            return {"verification_feedback": f"Error cleaning up {filename}: {e}"}
+
+    return {
+        "verification_feedback": "Could not determine which rule file to delete from the user's input."
+    }
 
 
 def response_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
@@ -1172,9 +1490,16 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         )
         return {"messages": [AIMessage(content=content)]}
     elif validation_error:
-        prompt_text = (
-            f"There was an error during rule verification: {validation_error}. Inform the user."
-        )
+        if isinstance(validation_error, str) and validation_error.startswith("Error generating rule:"):
+            prompt_text = (
+                "There was an error while regenerating the rule after a previous validation failure. "
+                f"The latest generation attempt failed with: {validation_error}. "
+                "Explain that this error belongs to the regeneration attempt, not necessarily to any previously shown rule."
+            )
+        else:
+            prompt_text = (
+                f"There was an error during rule verification: {validation_error}. Inform the user."
+            )
     elif generated_rule:
         regen_notice = ""
         if isinstance(last_validation_error, str) and last_validation_error.strip():

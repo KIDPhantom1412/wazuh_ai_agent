@@ -100,10 +100,6 @@ SKILLS: list[dict] = [
         "description": "Compares a regular expression representing data with a value decoded as `data`.",
     },
     {
-        "name": "decoded_as",
-        "description": "Matches with logs that have been decoded by a specific decoder.",
-    },
-    {
         "name": "default_match_type",
         "description": "Sets the default match type for regex-based comparisons.",
     },

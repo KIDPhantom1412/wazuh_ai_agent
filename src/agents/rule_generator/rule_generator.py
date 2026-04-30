@@ -37,7 +37,7 @@ def get_rule_generator_agent(model: BaseChatModel):
     )
     workflow.add_node("rule_generation", partial(rule_generation_node, model=model))
     workflow.add_node("rule_verification", partial(rule_verification_node, model=model))
-    workflow.add_node("cleanup_rule", cleanup_rule_node)
+    workflow.add_node("cleanup_rule", partial(cleanup_rule_node, model=model))
     workflow.add_node("response", partial(response_node, model=model))
 
     # Add edges

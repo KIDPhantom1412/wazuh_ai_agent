@@ -179,6 +179,57 @@ def validate_configuration():
     return response.json()
 
 
+def get_manager_logs(
+    pretty: bool = False,
+    limit: int | None = None,
+    offset: int | None = None,
+    tag: str | None = None,
+    level: str | None = None,
+):
+    """Get Wazuh manager logs from ossec.log."""
+    logger.info("Getting manager logs")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+
+    params: dict[str, str | int | bool] = {"pretty": pretty}
+    if limit is not None:
+        params["limit"] = limit
+    if offset is not None:
+        params["offset"] = offset
+    if tag:
+        params["tag"] = tag
+    if level:
+        params["level"] = level
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/manager/logs",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info("Get manager logs successfully")
+    else:
+        logger.error(f"Failed to get manager logs: {response.text}")
+    return response.json()
+
+
+def get_manager_logs_summary(pretty: bool = False):
+    """Get summary of Wazuh manager logs."""
+    logger.info("Getting manager logs summary")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.get(
+        f"{protocol}://{host}:{port}/manager/logs/summary",
+        headers=requests_headers,
+        params={"pretty": pretty},
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info("Get manager logs summary successfully")
+    else:
+        logger.error(f"Failed to get manager logs summary: {response.text}")
+    return response.json()
+
+
 def run_logtest(log_event: str, token: str = None, location: str = None, log_format: str = "json"):
     """Run logtest against a log event."""
     logger.info("Running logtest")
@@ -203,11 +254,15 @@ def run_logtest(log_event: str, token: str = None, location: str = None, log_for
     return response.json()
 
 if __name__ == "__main__":
-    # print(get_wazuh_server_api_info())
-    print(get_agents_status_summary())
-    print(get_agents_os_summary())
-    print(list_agents(True))
-    print(get_agents_summary())
-    print(get_agents_overview())
+    print(get_wazuh_server_api_info())
+    # print(get_agents_status_summary())
+    # print(get_agents_os_summary())
+    # print(list_agents(True))
+    # print(get_agents_summary())
+    # print(get_agents_overview())
 
-    print(get_config_agentless())
+    # print(get_config_agentless())
+    # print(get_manager_logs(limit=20, tag="wazuh-analysisd"))
+    # print(get_manager_logs_summary())
+    print(get_rule_info(201))
+    # print(validate_configuration())
