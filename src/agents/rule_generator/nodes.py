@@ -560,34 +560,6 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     generated_rule = state.get("generated_rule")
     logtest_passed = state.get("logtest_passed")
 
-    # Logic for routing
-    prompt_context = ""
-    if logtest_passed:
-        prompt_context = "Rule has been verified and applied. User needs to decide whether to keep it or delete it."
-    elif generated_rule:
-        prompt_context = "Rule generated but not verified. User needs to decide whether to verify (apply/test) or cancel."
-    else:
-        return {
-            "decision": "extract_requirements",
-            "user_input_history": user_input_history,
-            # Reset stale state before starting a fresh generation flow.
-            "missing_parameters": None,
-            "logs_preview": [],
-            "raw_logs": [],
-            "log_analysis": None,
-            "is_feasible": None,
-            "infeasibility_reason": None,
-            "generated_rule": None,
-            "verification_rule_content": None,
-            "temp_json_rule_ids": [],
-            "rule_id": None,
-            "rule_filename": None,
-            "validation_error": None,
-            "last_validation_error": None,
-            "logtest_passed": None,
-            "verification_feedback": None,
-        }
-
     parser = PydanticOutputParser(pydantic_object=RouterDecision)
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -595,7 +567,10 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
                 "system",
                 """You are a router. Determine the user's intent based on the current state.
 
-        Context: {prompt_context}
+        Current State:
+        - Has Generated Rule: {has_generated_rule}
+        - Logtest Passed: {has_logtest_passed}
+
         Recent User Inputs:
         {history_text}
         User Input: {user_input}
@@ -604,7 +579,7 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         - 'verify_rule': User wants to verify/test the generated rule.
         - 'cancel_verification': User wants to cancel the process before verification.
         - 'keep_rule': User wants to keep the applied rule (after verification success).
-        - 'delete_rule': User wants to delete/revert the applied rule (after verification success).
+        - 'delete_rule': User wants to delete the rule or rule file.
         - 'extract_requirements': User wants to generate a new rule, change requirements, or start over.
         - 'unknown': Intent is unclear.
 
@@ -619,16 +594,40 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     try:
         result = chain.invoke(
             {
-                "prompt_context": prompt_context,
+                "has_generated_rule": "Yes" if generated_rule else "No",
+                "has_logtest_passed": "Yes" if logtest_passed else "No",
                 "history_text": history_text,
                 "user_input": user_input,
                 "format_instructions": parser.get_format_instructions(),
             }
         )
-        return {
+        
+        updates = {
             "decision": result.next_step,
             "user_input_history": user_input_history,
         }
+        
+        if result.next_step == "extract_requirements" and not generated_rule and not logtest_passed:
+            # Reset stale state before starting a fresh generation flow.
+            updates.update({
+                "missing_parameters": None,
+                "logs_preview": [],
+                "raw_logs": [],
+                "log_analysis": None,
+                "is_feasible": None,
+                "infeasibility_reason": None,
+                "generated_rule": None,
+                "verification_rule_content": None,
+                "temp_json_rule_ids": [],
+                "rule_id": None,
+                "rule_filename": None,
+                "validation_error": None,
+                "last_validation_error": None,
+                "logtest_passed": None,
+                "verification_feedback": None,
+            })
+            
+        return updates
     except Exception:
         return {"decision": "unknown", "user_input_history": user_input_history}
 
