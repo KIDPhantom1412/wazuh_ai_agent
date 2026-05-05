@@ -13,6 +13,7 @@ from .nodes import (
     mitre_expert_node,
     reporter_node,
     user_input_node,
+    visualization_node,
 )
 from .state import AttributionState
 
@@ -75,6 +76,7 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_node("MITRE_Expert_Node", partial(mitre_expert_node, model=model))
     graph.add_node("Reporter_Node", partial(reporter_node, model=model))
     graph.add_node("User_Input_Node", partial(user_input_node, model=model))
+    graph.add_node("Visualization_Node", partial(visualization_node, model=model))
 
     graph.set_entry_point("Decision_Node")
 
@@ -103,7 +105,8 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_edge("Log_Retrieval_Node", "Information_Synthesizer_Node")
     graph.add_edge("Information_Synthesizer_Node", "Attribution_Planner_Node")
     graph.add_edge("MITRE_Expert_Node", "Attribution_Planner_Node")
-    graph.add_edge("Reporter_Node", END)
+    graph.add_edge("Reporter_Node", "Visualization_Node")
+    graph.add_edge("Visualization_Node", END)
     graph.add_edge("User_Input_Node", END)
 
     app = graph.compile()

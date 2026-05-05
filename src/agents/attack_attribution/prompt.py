@@ -48,7 +48,7 @@ When Phase 2 breaks, instruct the Log_Retrieval_Node to perform a Multi-Dimensio
 
 attribution_investigation_prompt_long = """
 ### LOG RETRIEVAL NODE INSTRUCTION RULES
-When routing to the `Log_Retrieval_Node`, your `instruction` string MUST be extremely clear. Unless you are performing a generic Keyword Search, you MUST explicitly declare BOTH the **Investigation Target** and the **Behavior Type**. 
+When routing to the `Log_Retrieval_Node`, your `instruction` string MUST be extremely clear. Unless you are performing a generic Keyword Search, you MUST explicitly declare BOTH the **Investigation Target** and the **Behavior Type**.
 
 **DEFINITIONS:**
 - **Investigation Target**: The specific entity parameter you are querying. You MUST choose EXACTLY ONE parameter type from (`PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`, or `REGISTRY_PATH`) AND provide its specific value (e.g., "PID 6536" or "IP_ADDRESS 192.168.1.100").

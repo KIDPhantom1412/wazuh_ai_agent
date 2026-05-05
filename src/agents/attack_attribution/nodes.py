@@ -58,7 +58,7 @@ class SynthesizedFindings(BaseModel):
         3. NULL RESPONSE RULE: If the Raw Logs are empty, irrelevant, or insufficient to fulfill the instruction, you MUST output EXACTLY: "日志检索结果未包含符合预期的行为证据。发现的孤立事件为：[简述实际发现的内容]。" DO NOT fabricate a story.
 
         ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
-        FORMATTING RULE: DO NOT output any title or markdown headers. Just output the pure paragraph content. Must be affirmatively stated in Chinese."""
+        FORMATTING RULE: You MUST strictly use the hierarchical Markdown template defined in the System Prompt (using ###, >, -, and ```cmd). Must be in Chinese. """
     )
 
 
@@ -71,6 +71,7 @@ Nodes:
 4. MITRE_Expert_Node - optional
 5. Reporter_Node
 6. User_Input_Node
+7. Visualization_Node
 """
 
 
@@ -649,6 +650,31 @@ Do not automatically classify parent-to-child high-privilege access (e.g., 0x1ff
 {multi_host_instructions}
 
 {format_instructions}
+
+### STRICT OUTPUT SCHEMA FOR `detailed_findings` (CRITICAL FORMATTING)
+You MUST structure the `detailed_findings` field using the following generalized Markdown template.
+
+**[FORMAT TEMPLATE]**
+### [序号] [事件类型简述]
+> **基础信息**
+> - **时间**: `timestamp` (UTC+8)  [注：若为连续重复事件，请使用时间范围，例如 "2026-04-27T14:52:04 - 14:52:23"]
+> - **事件类型**: [明确描述行为及ID，例如："进程创建 (EventID: 1)" 或 "网络连接 (EventID: 3)"]
+> - **触发告警**: [SIEM 规则 ID 及名称]
+
+- **操作主体**: [发起动作的源头，例如：`Image (PID)` 或 `Source IP`]
+- **操作对象**: [承受动作的目标，例如：`ChildImage (PID)`、`IP:Port` 或 `Registry_Path`]
+- **核心细节*:
+  - [按需提取核心参数，如：命令行、协议、权限掩码、服务配置等。如果是命令行，必须使用 ```cmd 包裹]
+  - [如果是连续重复事件，请在此处注明 "执行次数: X次"]
+
+- **溯源判定**:
+  - **MITRE 映射**: [Txxxx: 技术名称]
+  - **初步结论**: [基于客观行为简述该事件的性质与溯源状态。示例：属于系统正常调用的背景噪音 / 确认执行了具有隐蔽特征的恶意载荷 ]
+
+**[DYNAMIC RULES - CRITICAL]**
+1. **GLOBAL OMISSION RULE**: If ANY field (e.g., `触发告警`, `操作对象`, `MITRE 映射`) is missing from the logs, logically inapplicable, or lacks definitive evidence, you MUST COMPLETELY OMIT that specific bullet point. DO NOT write "N/A", "不适用", or "None".
+2. **ROLE BOUNDARY**: You are strictly forbidden from forcefully assigning MITRE Tactic IDs to ambiguous behaviors. Only output `MITRE 映射` if the log explicitly contains a SIEM MITRE tag or the malicious intent is undeniable.
+3. **AGGREGATION RULE (CRITICAL)**: If multiple logs describe the EXACT SAME repetitive automated behavior within a short time window (e.g., the same Actor executing the exact same Target/Command like `hostname.exe` or `whoami.exe` multiple times), DO NOT create separate blocks for each log. You MUST aggregate them into a SINGLE block. Represent the `时间` as a range (e.g., "14:52:04 - 14:52:23"), list the distinct PIDs if applicable, and explicitly state the total execution count in the `核心细节` or `初步结论`.
 """
 
     prompt = ChatPromptTemplate.from_messages(
@@ -960,3 +986,97 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
         }
 
     return {"next_action_fromDecisionNode": None}
+
+
+def visualization_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
+    """Node 7: Visualization Node (Mermaid Flowchart)."""
+    logger.info("Executing Visualization Node: Generating Mermaid chart...")
+
+    final_report = state.get("final_report")
+    if not final_report:
+        logger.warning("No final report found. Skipping visualization.")
+        return {
+            "mermaid_chart": None,
+            "messages": [AIMessage(content="[Visualizer] 缺少最终报告，无法生成攻击拓扑图。")],
+        }
+
+    visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured Mermaid flowchart.
+
+**Instructions:**
+1. **Extract Core Elements:** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action for each timeline entry. Ensure zero information loss regarding technical indicators.
+2. **Graph Structure:** Construct a Mermaid `graph TD` (Top-Down) flowchart representing the chronological sequence of events.
+3. **Safe Node Formatting:** Enclose all node label text strictly within double quotes (e.g., `NodeID["[Time] - [Tactic]<br/>Action"]`) to ensure compatibility with Mermaid parsing engines and safely encapsulate special characters. Use `<br/>` for line breaks within nodes to maintain readability.
+4. **Chronological Flow:** Connect the nodes sequentially using solid arrows (`-->`) reflecting the exact timeline order.
+5. **Visual Styling:** Define CSS classes to differentiate node types. Apply a distinct highlight style (e.g., red borders/background) to nodes representing explicit malicious actions, payload downloads, or critical defense evasion tactics.
+6. **Output Format:** Output strictly the raw Markdown code block containing the Mermaid syntax.
+
+**Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
+- **[2026-05-12 08:15:22.100]** - **[Execution / T1204.002]**: 用户 `jdoe` 打开了一个恶意文档，导致 `winword.exe` (PID 4120) 执行了嵌入的宏 (macro)。
+- **[2026-05-12 08:15:25.330]** - **[Execution / T1059.003]**: `winword.exe` 生成了 `cmd.exe` (PID 5892) 以启动攻击的下一阶段。
+- **[2026-05-12 08:15:26.015]** - **[Ingress Tool Transfer / T1105]**: `cmd.exe` 执行带有 `-urlcache -split -f` 参数的 `certutil.exe` (PID 7740)，从 `http://malicious-domain.com/payload.exe` 下载远程载荷。
+- **[2026-05-12 08:15:30.450]** - **[Defense Evasion / T1218.011]**: 下载的恶意载荷通过 `rundll32.exe` (PID 8102) 运行，以绕过应用程序白名单执行。
+
+**Example Output:**
+```mermaid
+graph TD
+    classDef default fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#334155;
+    classDef malicious fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b;
+
+    T1["[2026-05-12 08:15:22.100]<br/>[Execution / T1204.002]<br/>winword.exe 执行嵌入的宏"]
+    T2["[2026-05-12 08:15:25.330]<br/>[Execution / T1059.003]<br/>winword.exe 生成 cmd.exe"]
+    T3["[2026-05-12 08:15:26.015]<br/>[Ingress Tool Transfer / T1105]<br/>certutil.exe 通过 -urlcache 下载远程载荷"]
+    T4["[2026-05-12 08:15:30.450]<br/>[Defense Evasion / T1218.011]<br/>rundll32.exe 绕过白名单执行载荷"]
+
+    T1 --> T2
+    T2 --> T3
+    T3 --> T4
+
+    class T3 malicious;
+    class T4 malicious;
+```
+"""
+
+    human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a Mermaid chart:\n\n{final_report}"
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [("system", visualizer_system_prompt), ("human", human_prompt)]
+    )
+
+    try:
+        visualizer_chain = prompt_template | model
+        result = visualizer_chain.invoke({"final_report": final_report})
+
+        raw_content = result.content
+        if isinstance(raw_content, list):
+            # 针对大模型返回 [{"type": "text", "text": "..."}] 结构的情况
+            text_parts = []
+            for block in raw_content:
+                if isinstance(block, dict) and "text" in block:
+                    text_parts.append(block["text"])
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            raw_content = "".join(text_parts)
+        elif not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+
+        # 使用正则精确提取 mermaid 代码块
+        match = re.search(r"```(?:mermaid)?\n(.*?)\n```", raw_content, re.DOTALL | re.IGNORECASE)
+        if match:
+            mermaid_code = match.group(1).strip()
+        else:
+            mermaid_code = raw_content.strip()
+
+        mermaid_code_formatted = f"```mermaid\n{mermaid_code}\n```"
+
+        logger.info("Mermaid chart generated successfully.")
+
+        return {
+            "mermaid_chart": mermaid_code_formatted,
+            "messages": [
+                AIMessage(content=f"攻击链路可视化视图已生成：\n\n{mermaid_code_formatted}")
+            ],
+        }
+
+    except Exception as e:
+        logger.error("Error generating mermaid chart: %s", e)
+        return {"messages": [AIMessage(content=f"攻击链路图生成失败，发生异常: {e}")]}
