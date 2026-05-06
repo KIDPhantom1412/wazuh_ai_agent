@@ -355,7 +355,7 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
 ## YOUR ARSENAL (TARGET NODES)
 - 'Log_Retrieval_Node': Routes to a specialized AI agent equipped with Wazuh API tools.
   - **How to instruct**: Provide clear, natural language instructions detailing *what* you want to find. You MUST explicitly mention *the Agent ID* in your instruction.
-  - *Example*: "Investigate PID 6536 on Agent 005 for lateral activities, specifically focusing on File Drops. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
+  - *Example*: "Investigate PID 6536 on Agent 005 for File Creation. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
   - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT automatically translate IP addresses into Agent IDs for you.
 
 - 'Reporter_Node': Routes to the reporting engine to close the case.
@@ -988,55 +988,170 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
     return {"next_action_fromDecisionNode": None}
 
 
-def visualization_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 7: Visualization Node (Mermaid Flowchart)."""
-    logger.info("Executing Visualization Node: Generating Mermaid chart...")
+# def visualization_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
+#     """Node 7: Visualization Node (Mermaid Flowchart)."""
+#     logger.info("Executing Visualization Node: Generating Mermaid chart...")
+
+#     final_report = state.get("final_report")
+#     if not final_report:
+#         logger.warning("No final report found. Skipping visualization.")
+#         return {
+#             "mermaid_chart": None,
+#             "messages": [AIMessage(content="[Visualizer] 缺少最终报告，无法生成攻击拓扑图。")],
+#         }
+
+#     visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured Mermaid flowchart.
+
+# **Instructions:**
+# 1. **Extract Core Elements:** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action for each timeline entry. Ensure zero information loss regarding technical indicators.
+# 2. **Graph Structure:** Construct a Mermaid `graph TD` (Top-Down) flowchart representing the chronological sequence of events.
+# 3. **Safe Node Formatting:** Enclose all node label text strictly within double quotes (e.g., `NodeID["[Time] - [Tactic]<br/>Action"]`) to ensure compatibility with Mermaid parsing engines and safely encapsulate special characters. Use `<br/>` for line breaks within nodes to maintain readability.
+# 4. **Chronological Flow:** Connect the nodes sequentially using solid arrows (`-->`) reflecting the exact timeline order.
+# 5. **Visual Styling:** Define CSS classes to differentiate node types. Apply a distinct highlight style (e.g., red borders/background) to nodes representing explicit malicious actions, payload downloads, or critical defense evasion tactics.
+# 6. **Output Format:** Output strictly the raw Markdown code block containing the Mermaid syntax.
+
+# **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
+# - **[2026-05-12 08:15:22.100]** - **[Execution / T1204.002]**: 用户 `jdoe` 打开了一个恶意文档，导致 `winword.exe` (PID 4120) 执行了嵌入的宏 (macro)。
+# - **[2026-05-12 08:15:25.330]** - **[Execution / T1059.003]**: `winword.exe` 生成了 `cmd.exe` (PID 5892) 以启动攻击的下一阶段。
+# - **[2026-05-12 08:15:26.015]** - **[Ingress Tool Transfer / T1105]**: `cmd.exe` 执行带有 `-urlcache -split -f` 参数的 `certutil.exe` (PID 7740)，从 `http://malicious-domain.com/payload.exe` 下载远程载荷。
+# - **[2026-05-12 08:15:30.450]** - **[Defense Evasion / T1218.011]**: 下载的恶意载荷通过 `rundll32.exe` (PID 8102) 运行，以绕过应用程序白名单执行。
+
+# **Example Output:**
+# ```mermaid
+# graph TD
+#     classDef default fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#334155;
+#     classDef malicious fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b;
+
+#     T1["[2026-05-12 08:15:22.100]<br/>[Execution / T1204.002]<br/>winword.exe 执行嵌入的宏"]
+#     T2["[2026-05-12 08:15:25.330]<br/>[Execution / T1059.003]<br/>winword.exe 生成 cmd.exe"]
+#     T3["[2026-05-12 08:15:26.015]<br/>[Ingress Tool Transfer / T1105]<br/>certutil.exe 通过 -urlcache 下载远程载荷"]
+#     T4["[2026-05-12 08:15:30.450]<br/>[Defense Evasion / T1218.011]<br/>rundll32.exe 绕过白名单执行载荷"]
+
+#     T1 --> T2
+#     T2 --> T3
+#     T3 --> T4
+
+#     class T3 malicious;
+#     class T4 malicious;
+# ```
+# """
+
+#     human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a Mermaid chart:\n\n{final_report}"
+
+#     prompt_template = ChatPromptTemplate.from_messages(
+#         [("system", visualizer_system_prompt), ("human", human_prompt)]
+#     )
+
+#     try:
+#         visualizer_chain = prompt_template | model
+#         result = visualizer_chain.invoke({"final_report": final_report})
+
+#         raw_content = result.content
+#         if isinstance(raw_content, list):
+#             # 针对大模型返回 [{"type": "text", "text": "..."}] 结构的情况
+#             text_parts = []
+#             for block in raw_content:
+#                 if isinstance(block, dict) and "text" in block:
+#                     text_parts.append(block["text"])
+#                 elif isinstance(block, str):
+#                     text_parts.append(block)
+#             raw_content = "".join(text_parts)
+#         elif not isinstance(raw_content, str):
+#             raw_content = str(raw_content)
+
+#         # 使用正则精确提取 mermaid 代码块
+#         match = re.search(r"```(?:mermaid)?\n(.*?)\n```", raw_content, re.DOTALL | re.IGNORECASE)
+#         if match:
+#             mermaid_code = match.group(1).strip()
+#         else:
+#             mermaid_code = raw_content.strip()
+
+#         mermaid_code_formatted = f"```mermaid\n{mermaid_code}\n```"
+
+#         logger.info("Mermaid chart generated successfully.")
+
+#         return {
+#             "mermaid_chart": mermaid_code_formatted,
+#             "messages": [
+#                 AIMessage(content=f"攻击链路可视化视图已生成：\n\n{mermaid_code_formatted}")
+#             ],
+#         }
+
+#     except Exception as e:
+#         logger.error("Error generating mermaid chart: %s", e)
+#         return {"messages": [AIMessage(content=f"攻击链路图生成失败，发生异常: {e}")]}
+
+
+def visualization_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 7: Visualization Node (SVG Flowchart)."""
+    logger.info("Executing Visualization Node: Generating SVG chart...")
 
     final_report = state.get("final_report")
     if not final_report:
         logger.warning("No final report found. Skipping visualization.")
         return {
-            "mermaid_chart": None,
+            "svg_chart": None,
             "messages": [AIMessage(content="[Visualizer] 缺少最终报告，无法生成攻击拓扑图。")],
         }
 
-    visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured Mermaid flowchart.
+    visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured SVG vector graphic representing a vertical timeline.
 
 **Instructions:**
-1. **Extract Core Elements:** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action for each timeline entry. Ensure zero information loss regarding technical indicators.
-2. **Graph Structure:** Construct a Mermaid `graph TD` (Top-Down) flowchart representing the chronological sequence of events.
-3. **Safe Node Formatting:** Enclose all node label text strictly within double quotes (e.g., `NodeID["[Time] - [Tactic]<br/>Action"]`) to ensure compatibility with Mermaid parsing engines and safely encapsulate special characters. Use `<br/>` for line breaks within nodes to maintain readability.
-4. **Chronological Flow:** Connect the nodes sequentially using solid arrows (`-->`) reflecting the exact timeline order.
-5. **Visual Styling:** Define CSS classes to differentiate node types. Apply a distinct highlight style (e.g., red borders/background) to nodes representing explicit malicious actions, payload downloads, or critical defense evasion tactics.
-6. **Output Format:** Output strictly the raw Markdown code block containing the Mermaid syntax.
+1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
+2. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
+3. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
+4. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
+5. **Visual Styling:**
+    - Standard events: light blue/gray borders and backgrounds.
+    - Malicious events: light red backgrounds and red borders.
+    Apply the malicious style to nodes representing explicit malicious actions, payload downloads, or credential dumping.
+6. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
 
 **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
-- **[2026-05-12 08:15:22.100]** - **[Execution / T1204.002]**: 用户 `jdoe` 打开了一个恶意文档，导致 `winword.exe` (PID 4120) 执行了嵌入的宏 (macro)。
-- **[2026-05-12 08:15:25.330]** - **[Execution / T1059.003]**: `winword.exe` 生成了 `cmd.exe` (PID 5892) 以启动攻击的下一阶段。
-- **[2026-05-12 08:15:26.015]** - **[Ingress Tool Transfer / T1105]**: `cmd.exe` 执行带有 `-urlcache -split -f` 参数的 `certutil.exe` (PID 7740)，从 `http://malicious-domain.com/payload.exe` 下载远程载荷。
-- **[2026-05-12 08:15:30.450]** - **[Defense Evasion / T1218.011]**: 下载的恶意载荷通过 `rundll32.exe` (PID 8102) 运行，以绕过应用程序白名单执行。
+- **[2026-04-27 14:52:23.194]** - **[Execution / T1059.003]**: powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"
+- **[2026-04-27 14:52:23.195]** - **[Credential Access / T1003.001]**: cmd.exe 启动 nanodump.x64.exe (PID: 13116) 转储 LSASS 内存。
 
 **Example Output:**
-```mermaid
-graph TD
-    classDef default fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#334155;
-    classDef malicious fill:#fee2e2,stroke:#ef4444,stroke-width:2px,color:#991b1b;
+```xml
+<svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" viewBox="0 0 1000 380" width="100%" height="100%">
+    <style>
+        .timeline-line {{ stroke: #cbd5e1; stroke-width: 4px; }}
+        .node-dot {{ fill: #3b82f6; stroke: #fff; stroke-width: 2px; }}
+        .node-dot-malicious {{ fill: #ef4444; stroke: #fff; stroke-width: 2px; }}
+        .title {{ font-family: sans-serif; font-size: 18px; font-weight: bold; fill: #1e293b; }}
+    </style>
 
-    T1["[2026-05-12 08:15:22.100]<br/>[Execution / T1204.002]<br/>winword.exe 执行嵌入的宏"]
-    T2["[2026-05-12 08:15:25.330]<br/>[Execution / T1059.003]<br/>winword.exe 生成 cmd.exe"]
-    T3["[2026-05-12 08:15:26.015]<br/>[Ingress Tool Transfer / T1105]<br/>certutil.exe 通过 -urlcache 下载远程载荷"]
-    T4["[2026-05-12 08:15:30.450]<br/>[Defense Evasion / T1218.011]<br/>rundll32.exe 绕过白名单执行载荷"]
+    <text x="50" y="30" class="title">ATTACK TIMELINE &amp; EXECUTION FLOW</text>
+    <line x1="50" y1="50" x2="50" y2="360" class="timeline-line" />
 
-    T1 --> T2
-    T2 --> T3
-    T3 --> T4
+    <!-- Event 1 (Default) -->
+    <circle cx="50" cy="90" r="8" class="node-dot" />
+    <foreignObject x="80" y="50" width="850" height="120">
+        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
+            <div style="margin-bottom: 8px;">
+                <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
+                <strong style="color: #0f172a; font-size: 14px; margin-left: 12px;">[Execution / T1059.003]</strong>
+            </div>
+            <div style="font-size: 14px; color: #334155; margin-bottom: 6px; line-height: 1.4;">powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。</div>
+            <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\atomics\\..\\ExternalPayloads\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
+        </div>
+    </foreignObject>
 
-    class T3 malicious;
-    class T4 malicious;
-```
+    <!-- Event 2 (Malicious) -->
+    <circle cx="50" cy="250" r="8" class="node-dot-malicious" />
+    <foreignObject x="80" y="210" width="850" height="120">
+        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
+            <div style="margin-bottom: 8px;">
+                <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
+                <strong style="color: #991b1b; font-size: 14px; margin-left: 12px;">[Credential Access / T1003.001]</strong>
+            </div>
+            <div style="font-size: 14px; color: #7f1d1d; line-height: 1.4;">cmd.exe 启动 nanodump.x64.exe (PID: 13116) 转储 LSASS 内存。</div>
+        </div>
+    </foreignObject>
+</svg>
 """
 
-    human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a Mermaid chart:\n\n{final_report}"
+    human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a vertical SVG timeline:\n\n{final_report}"
 
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", visualizer_system_prompt), ("human", human_prompt)]
@@ -1048,7 +1163,6 @@ graph TD
 
         raw_content = result.content
         if isinstance(raw_content, list):
-            # 针对大模型返回 [{"type": "text", "text": "..."}] 结构的情况
             text_parts = []
             for block in raw_content:
                 if isinstance(block, dict) and "text" in block:
@@ -1059,24 +1173,23 @@ graph TD
         elif not isinstance(raw_content, str):
             raw_content = str(raw_content)
 
-        # 使用正则精确提取 mermaid 代码块
-        match = re.search(r"```(?:mermaid)?\n(.*?)\n```", raw_content, re.DOTALL | re.IGNORECASE)
+        match = re.search(r"(<svg.*?>.*?</svg>)", raw_content, re.DOTALL | re.IGNORECASE)
         if match:
-            mermaid_code = match.group(1).strip()
+            svg_code = match.group(1).strip()
         else:
-            mermaid_code = raw_content.strip()
+            svg_code = re.sub(
+                r"^```(?:xml|svg|html)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
+            )
 
-        mermaid_code_formatted = f"```mermaid\n{mermaid_code}\n```"
-
-        logger.info("Mermaid chart generated successfully.")
+        logger.info("SVG chart generated successfully.")
 
         return {
-            "mermaid_chart": mermaid_code_formatted,
+            "svg_chart": svg_code,
             "messages": [
-                AIMessage(content=f"攻击链路可视化视图已生成：\n\n{mermaid_code_formatted}")
+                AIMessage(content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
             ],
         }
 
     except Exception as e:
-        logger.error("Error generating mermaid chart: %s", e)
-        return {"messages": [AIMessage(content=f"攻击链路图生成失败，发生异常: {e}")]}
+        logger.error("Error generating SVG chart: %s", e)
+        return {"messages": [AIMessage(content=f"攻击链路图(SVG)生成失败，发生异常: {e}")]}

@@ -52,7 +52,7 @@ When routing to the `Log_Retrieval_Node`, your `instruction` string MUST be extr
 
 **DEFINITIONS:**
 - **Investigation Target**: The specific entity parameter you are querying. You MUST choose EXACTLY ONE parameter type from (`PID`, `FILE_PATH`, `IP_ADDRESS`, `PORT`, `SERVICE_NAME`, `USER_ACCOUNT`, or `REGISTRY_PATH`) AND provide its specific value (e.g., "PID 6536" or "IP_ADDRESS 192.168.1.100").
-- **Behavior Type**: The specific category of system event you want to analyze (e.g., `Process Creation (Upward)` or `Network Connections`).
+- **Behavior Type**: The specific category of system event you want to analyze. You MUST choose EXACTLY ONE behavior type per instruction from the list below (e.g., ONLY `Process Creation (Upward)` OR ONLY `Network Connections`). You CANNOT select multiple.
 
 ### STRICT PARAMETER MAPPING
 To prevent invalid API queries and eliminate backend search errors, you MUST STRICTLY match your **Investigation Target** parameter to the **Behavior Type** requested. You are STRICTLY FORBIDDEN from using parameters not explicitly listed for a specific behavior below:
@@ -79,7 +79,7 @@ To prevent invalid API queries and eliminate backend search errors, you MUST STR
 
 #### CRITICAL EXCEPTIONS & RULES
 - **Keyword Searches (Last Resort)**: If you need to search for a general text string, malicious filename, or IP address without restricting it to a specific event type, specify a "Keyword Search". **Keyword searches DO NOT require a Behavior Type and accept any raw string as the target.** Use this ONLY when specific entity-based queries fail to yield results.
-- **CRITICAL SPLIT RULE**: You MUST NEVER combine Upward and Downward traces in a single instruction. If you need to trace both a parent and a child, you MUST do so sequentially across different turns.
+- **ATOMIC QUERY RULE (SINGLE BEHAVIOR ONLY - CRITICAL)**: You are STRICTLY FORBIDDEN from requesting multiple Behavior Types in a single instruction. For example, you CANNOT ask to investigate "Network Connections AND File Creation" for a PID in the same query. You MUST split multi-dimensional investigations into separate, sequential queries across different turns. This strictly applies to Upward and Downward process traces as well—never combine them.
 
 
 ### YOUR INVESTIGATION STRATEGY (DYNAMIC HUNTING HEURISTICS)

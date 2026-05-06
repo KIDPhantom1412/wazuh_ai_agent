@@ -82,3 +82,4 @@ class AttributionState(TypedDict):
 
     # 可视化展示
     mermaid_chart: str | None
+    svg_chart: str | None
