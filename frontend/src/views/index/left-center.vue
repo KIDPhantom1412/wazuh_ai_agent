@@ -5,7 +5,9 @@ import axios from 'axios';
 import { ElMessage } from "element-plus";
 
 // --- 配置信息 (建议后期抽取到全局配置文件) ---
-const INDEXER_AUTH = btoa('admin:It2bqmagNT.hxelVM9BrhnKwAZ?5Iz6S');
+const user = import.meta.env.VITE_WAZUH_INDEXER_USER;
+const pass = import.meta.env.VITE_WAZUH_INDEXER_PASSWORD;
+const INDEXER_AUTH = btoa(`${user}:${pass}`);
 
 const option = ref({});
 const state = reactive({

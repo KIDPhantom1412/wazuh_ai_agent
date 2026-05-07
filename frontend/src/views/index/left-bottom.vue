@@ -2,7 +2,9 @@
 import { ref, reactive, onMounted, onBeforeUnmount } from "vue";
 import axios from 'axios';
 
-const INDEXER_AUTH = btoa('admin:It2bqmagNT.hxelVM9BrhnKwAZ?5Iz6S');
+const indexerUser = import.meta.env.VITE_WAZUH_INDEXER_USER;
+const indexerPass = import.meta.env.VITE_WAZUH_INDEXER_PASSWORD;
+const INDEXER_AUTH = btoa(`${indexerUser}:${indexerPass}`);
 
 const state = reactive({
   alarmData: [] as any[],

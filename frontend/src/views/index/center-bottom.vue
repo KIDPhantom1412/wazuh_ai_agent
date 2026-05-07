@@ -4,7 +4,9 @@ import { ElMessage } from "element-plus";
 import axios from 'axios';
 
 // --- 配置与状态 ---
-const AUTH_CREDENTIALS = btoa('wazuh:OaOl0*64+.eFxzmBsBe5t8*G9xxEY5ye');
+const wazuhUser = import.meta.env.VITE_WAZUH_SERVER_API_USERNAME;
+const wazuhPass = import.meta.env.VITE_WAZUH_SERVER_API_PASSWORD;
+const AUTH_PAYLOAD = btoa(`${wazuhUser}:${wazuhPass}`);
 const token = ref("");
 
 const searchText = ref("");
@@ -44,7 +46,7 @@ const valueSuggestions = computed(() => {
 const authenticate = async () => {
   try {
     const res = await axios.get('/wazuh-api/security/user/authenticate', {
-      headers: { 'Authorization': `Basic ${AUTH_CREDENTIALS}` }
+      headers: { 'Authorization': `Basic ${AUTH_PAYLOAD}` }
     });
     token.value = res.data.data.token;
     return true;

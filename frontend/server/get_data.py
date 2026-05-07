@@ -1,12 +1,16 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import urllib3
 from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv  # 引入 dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 app = FastAPI()
 
-# 允许跨域，方便前端调用
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,16 +20,30 @@ app.add_middleware(
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 配置保持不变
-WAZUH_URL = "https://192.168.74.130:55000"
-INDEXER_URL = "https://192.168.74.130:9200"
-USER = "wazuh"
-PASSWORD = "OaOl0*64+.eFxzmBsBe5t8*G9xxEY5ye"
-INDEXER_AUTH = ("admin", "It2bqmagNT.hxelVM9BrhnKwAZ?5Iz6S")
+# --- 从环境变量读取配置 ---
+# 使用 os.getenv('变量名', '默认值')
+WAZUH_PROTOCOL = os.getenv("VITE_WAZUH_SERVER_API_PROTOCOL", "https")
+WAZUH_HOST = os.getenv("VITE_WAZUH_SERVER_API_HOST", "127.0.0.1")
+WAZUH_PORT = os.getenv("VITE_WAZUH_SERVER_API_PORT", "55000")
+WAZUH_URL = f"{WAZUH_PROTOCOL}://{WAZUH_HOST}:{WAZUH_PORT}"
+
+INDEXER_HOST = os.getenv("VITE_WAZUH_SERVER_API_HOST", "127.0.0.1")
+INDEXER_PORT = os.getenv("VITE_WAZUH_INDEXER_PORT", "9200")
+INDEXER_URL = f"https://{INDEXER_HOST}:{INDEXER_PORT}"
+
+USER = os.getenv("VITE_WAZUH_SERVER_API_USERNAME")
+PASSWORD = os.getenv("VITE_WAZUH_SERVER_API_PASSWORD")
+
+INDEXER_USER = os.getenv("VITE_WAZUH_INDEXER_USER")
+INDEXER_PASS = os.getenv("VITE_WAZUH_INDEXER_PASSWORD")
+INDEXER_AUTH = (INDEXER_USER, INDEXER_PASS)
+# -----------------------
 
 def get_wazuh_token():
     auth_url = f"{WAZUH_URL}/security/user/authenticate"
+    # 注意：verify=False 是因为 Wazuh 默认使用自签名证书
     res = requests.get(auth_url, auth=(USER, PASSWORD), verify=False)
+    res.raise_for_status() # 如果登录失败抛出异常
     return res.json()['data']['token']
 
 @app.get("/api/topo")
@@ -81,6 +99,7 @@ async def get_topo():
         
         return nodes
     except Exception as e:
+        print(f"Error fetching topo: {e}") # 后端打印一下具体的错误
         return {"error": str(e)}
 
 if __name__ == "__main__":

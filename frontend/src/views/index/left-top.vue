@@ -13,8 +13,12 @@ const state = reactive({
 });
 
 // --- Wazuh 配置 (建议以后提取到全局) ---
-const AUTH_PAYLOAD = btoa('wazuh:OaOl0*64+.eFxzmBsBe5t8*G9xxEY5ye');
-const INDEXER_AUTH = btoa('admin:It2bqmagNT.hxelVM9BrhnKwAZ?5Iz6S');
+const wazuhUser = import.meta.env.VITE_WAZUH_SERVER_API_USERNAME;
+const wazuhPass = import.meta.env.VITE_WAZUH_SERVER_API_PASSWORD;
+const AUTH_PAYLOAD = btoa(`${wazuhUser}:${wazuhPass}`);
+const indexerUser = import.meta.env.VITE_WAZUH_INDEXER_USER;
+const indexerPass = import.meta.env.VITE_WAZUH_INDEXER_PASSWORD;
+const INDEXER_AUTH = btoa(`${indexerUser}:${indexerPass}`);
 
 const getWazuhData = async () => {
   try {

@@ -3,7 +3,9 @@ import { ref, reactive, onMounted, computed } from "vue";
 import { ElMessage } from "element-plus";
 import axios from 'axios';
 
-const INDEXER_AUTH = btoa('admin:It2bqmagNT.hxelVM9BrhnKwAZ?5Iz6S');
+const indexerUser = import.meta.env.VITE_WAZUH_INDEXER_USER;
+const indexerPass = import.meta.env.VITE_WAZUH_INDEXER_PASSWORD;
+const INDEXER_AUTH = btoa(`${indexerUser}:${indexerPass}`);
 
 // --- 状态管理 ---
 const searchText = ref("");
