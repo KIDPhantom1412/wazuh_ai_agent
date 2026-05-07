@@ -27,7 +27,7 @@ model_attribution = ChatOpenAI(
     api_key=settings.TEST_LLM_API_KEY,
     base_url=settings.TEST_LLM_BASE_URL,
     http_client=custom_http_client,
-    model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+    # model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
 )
 
 demo_agent = get_demo_agent(model)
