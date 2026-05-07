@@ -29,7 +29,7 @@ const handleSend = async () => {
       content: m.content
     }));
     const res = await axios.post('/agent-api/runs/wait', {
-      assistant_id: "attack_attributor",
+      assistant_id: "demo_agent",
       input: {
         messages: history
       },

@@ -34,14 +34,14 @@ export default defineConfig(({ command, mode }: ConfigEnv): UserConfig => {
       proxy: {
         // Wazuh API 代理
         '/wazuh-api': {
-          target: 'https://192.168.74.130:55000', 
+          target: 'https://192.168.109.138:55000', 
           changeOrigin: true,
           secure: false, // 必须为 false，因为 Wazuh 使用自签名证书
           rewrite: (path) => path.replace(/^\/wazuh-api/, '')
         },
         // Wazuh Indexer 代理
         '/wazuh-indexer': {
-          target: 'https://192.168.74.130:9200',
+          target: 'https://192.168.109.138:9200',
           changeOrigin: true,
           secure: false,
           rewrite: (path) => path.replace(/^\/wazuh-indexer/, '')
