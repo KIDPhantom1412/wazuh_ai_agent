@@ -12,6 +12,7 @@ WAZUH_AI_AGENT
 │  └─wazuh_api
 ├─tests
 ├─pyproject.toml
+├─docs
 └─uv.lock
 ```
 
