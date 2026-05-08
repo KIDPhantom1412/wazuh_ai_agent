@@ -1,6 +1,6 @@
 
 import type { UserConfig, ConfigEnv } from 'vite';
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from "path";
 import AutoImport from 'unplugin-auto-import/vite'
@@ -9,8 +9,11 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 //https://github.com/element-plus/unplugin-element-plus/blob/HEAD/README.zh-CN.md
 import ElementPlus from 'unplugin-element-plus/vite'
 export default defineConfig(({ command, mode }: ConfigEnv): UserConfig => {
-
-  // const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, __dirname, '')
+  const wazuhProtocol = env.VITE_WAZUH_SERVER_API_PROTOCOL || 'https'
+  const wazuhHost = env.VITE_WAZUH_SERVER_API_HOST || '127.0.0.1'
+  const wazuhPort = env.VITE_WAZUH_SERVER_API_PORT || '55000'
+  const wazuhIndexerPort = env.VITE_WAZUH_INDEXER_PORT || '9200'
   console.log(command, mode);
   return {
     plugins: [vue(),
@@ -34,14 +37,14 @@ export default defineConfig(({ command, mode }: ConfigEnv): UserConfig => {
       proxy: {
         // Wazuh API 代理
         '/wazuh-api': {
-          target: 'https://192.168.109.138:55000', 
+          target: `${wazuhProtocol}://${wazuhHost}:${wazuhPort}`,
           changeOrigin: true,
           secure: false, // 必须为 false，因为 Wazuh 使用自签名证书
           rewrite: (path) => path.replace(/^\/wazuh-api/, '')
         },
         // Wazuh Indexer 代理
         '/wazuh-indexer': {
-          target: 'https://192.168.109.138:9200',
+          target: `${wazuhProtocol}://${wazuhHost}:${wazuhIndexerPort}`,
           changeOrigin: true,
           secure: false,
           rewrite: (path) => path.replace(/^\/wazuh-indexer/, '')

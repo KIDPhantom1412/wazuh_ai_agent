@@ -31,7 +31,8 @@ import { Graph } from '@antv/x6';
 import axios from 'axios';
 
 // --- 配置区 ---
-const API_URL = 'http://localhost:8000/api/topo'; // 指向你的 FastAPI 地址
+const TOPOLOGY_API_URL = import.meta.env.VITE_TOPOLOGY_API_URL?.trim() || 'http://127.0.0.1:8000/api/topo';
+const TOPOLOGY_MOCK_URL = '/topology/agents_topo_data.json';
 const REFRESH_INTERVAL = 30000; // 30秒自动刷新一次
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -64,10 +65,16 @@ const fetchTopoData = async () => {
   loading.value = true;
   
   try {
-    const res = await axios.get(API_URL);
+    const res = await axios.get(TOPOLOGY_API_URL);
     renderTopology(res.data);
   } catch (err) {
-    console.error("拓扑数据获取失败:", err);
+    console.warn('实时拓扑接口不可用，回退到内置示例数据。', err);
+    try {
+      const mockRes = await axios.get(TOPOLOGY_MOCK_URL);
+      renderTopology(mockRes.data);
+    } catch (mockErr) {
+      console.error("拓扑数据获取失败:", mockErr);
+    }
   } finally {
     loading.value = false;
   }
