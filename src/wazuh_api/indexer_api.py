@@ -153,6 +153,29 @@ def agent_archives(
     return result
 
 
+def search_archived_logs(query_body: dict):
+    """Search archived logs in Wazuh Indexer."""
+    logger.info("Searching archived logs")
+
+    url = f"{protocol}://{host}:{port}/wazuh-archives-*/_search"
+    headers = {"Content-Type": "application/json"}
+
+    response = requests.post(
+        url,
+        auth=HTTPBasicAuth(username, password),
+        headers=headers,
+        data=json.dumps(query_body),
+        verify=False,
+    )
+
+    if response.status_code == 200:
+        logger.info("Search archived logs successfully")
+    else:
+        logger.error(f"Failed to search archived logs: {response.text}")
+
+    return response.json()
+
+
 if __name__ == "__main__":
     # 测试 count_agent_alerts
     print(f"最近 1 小时告警数: {count_agent_alerts('001', 'now-1h', 'now')}")

@@ -3,6 +3,7 @@
   "graphs": {
     "demo_agent": "./src/agents/agent.py:demo_agent",
     "indexer_agent": "./src/agents/agent.py:indexer_agent",
+    "rule_generator": "./src/agents/agent.py:rule_generator",
     "attack_attributor": "./src/agents/agent.py:attack_attributor"
   },
   "env": ".env"
