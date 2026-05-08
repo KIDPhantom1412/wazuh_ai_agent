@@ -26,5 +26,260 @@
         },
         "message": "All selected rules were returned",
         "error": 0
+    },
+    "count_agent_alerts_response": {
+        "count": 2116,
+        "_shards": {
+            "total": 132,
+            "successful": 132,
+            "skipped": 0,
+            "failed": 0
+        }
+    },
+    "agent_alerts_response": {
+        "took": 26,
+        "timed_out": false,
+        "_shards": {
+            "total": 132,
+            "successful": 132,
+            "skipped": 0,
+            "failed": 0
+        },
+        "hits": {
+            "total": {
+                "value": 11,
+                "relation": "eq"
+            },
+            "max_score": null,
+            "hits": [
+                {
+                    "_index": "wazuh-alerts-4.x-2026.01.22",
+                    "_id": "HlCb5JsBSVsQ_SVlhpg4",
+                    "_score": null,
+                    "_source": {
+                        "agent": {
+                            "ip": "192.168.109.135",
+                            "name": "UbuntuSSH",
+                            "id": "004"
+                        },
+                        "data": {
+                            "srcuser": "admin0",
+                            "srcip": "192.168.109.130"
+                        },
+                        "rule": {
+                            "firedtimes": 3,
+                            "mail": false,
+                            "level": 10,
+                            "description": "Multiple SSH login attempts using non-existent usernames.",
+                            "groups": [
+                                "local",
+                                "syslog",
+                                "sshd"
+                            ],
+                            "mitre": {
+                                "technique": [
+                                    "Brute Force"
+                                ],
+                                "id": [
+                                    "T1110"
+                                ],
+                                "tactic": [
+                                    "Credential Access"
+                                ]
+                            },
+                            "id": "5764",
+                            "frequency": 3
+                        },
+                        "full_log": "Jan 12 02:18:58 roy-virtual-machine sshd[11467]: Failed password for invalid user admin0 from 192.168.109.130 port 38248 ssh2",
+                        "id": "1769066955.2675830",
+                        "timestamp": "2026-01-22T15:29:15.238+0800",
+                        "predecoder": {
+                            "hostname": "roy-virtual-machine",
+                            "program_name": "sshd",
+                            "timestamp": "Jan 12 02:18:58"
+                        },
+                        "previous_output": "Jan 12 02:18:58 roy-virtual-machine sshd[11464]: Failed password for invalid user admin0 from 192.168.109.130 port 38218 ssh2\nJan 12 02:18:58 roy-virtual-machine sshd[11463]: Failed password for invalid user admin0 from 192.168.109.130 port 38204 ssh2",
+                        "manager": {
+                            "name": "does-virtual-machine"
+                        },
+                        "decoder": {
+                            "parent": "sshd",
+                            "name": "sshd"
+                        },
+                        "input": {
+                            "type": "log"
+                        },
+                        "@timestamp": "2026-01-22T07:29:15.238Z",
+                        "location": "journald"
+                    },
+                    "sort": [
+                        1769066955238
+                    ]
+                }
+            ]
+        }
+    },
+    "agent_archives_response": {
+        "took": 5776,
+        "timed_out": false,
+        "_shards": {
+            "total": 81,
+            "successful": 81,
+            "skipped": 0,
+            "failed": 0
+        },
+        "hits": {
+            "total": {
+                "value": 98,
+                "relation": "eq"
+            },
+            "max_score": null,
+            "hits": [
+                {
+                    "_index": "wazuh-archives-4.x-2026.03.09",
+                    "_id": "ZeFt0JwBHsoVF6nsdITt",
+                    "_score": null,
+                    "_source": {
+                        "agent": {
+                            "ip": "192.168.109.137",
+                            "name": "win10",
+                            "id": "005"
+                        },
+                        "manager": {
+                            "name": "does-virtual-machine"
+                        },
+                        "data": {
+                            "win": {
+                                "eventdata": {
+                                    "image": "C:\\\\Windows\\\\system32\\\\svchost.exe",
+                                    "processGuid": "{70e31e6c-25db-69ae-2400-000000000800}",
+                                    "processId": "1576",
+                                    "utcTime": "2026-03-09 02:29:18.234",
+                                    "targetFilename": "C:\\\\Windows\\\\Prefetch\\\\WHOAMI.EXE-9D378AFE.pf",
+                                    "ruleName": "technique_id=T1047,technique_name=File System Permissions Weakness",
+                                    "creationUtcTime": "2026-03-03 03:36:28.881",
+                                    "user": "NT AUTHORITY\\\\SYSTEM"
+                                },
+                                "system": {
+                                    "eventID": "11",
+                                    "keywords": "0x8000000000000000",
+                                    "providerGuid": "{5770385f-c22a-43e0-bf4c-06f5698ffbd9}",
+                                    "level": "4",
+                                    "channel": "Microsoft-Windows-Sysmon/Operational",
+                                    "opcode": "0",
+                                    "message": "\"File created:\r\nRuleName: technique_id=T1047,technique_name=File System Permissions Weakness\r\nUtcTime: 2026-03-09 02:29:18.234\r\nProcessGuid: {70e31e6c-25db-69ae-2400-000000000800}\r\nProcessId: 1576\r\nImage: C:\\Windows\\system32\\svchost.exe\r\nTargetFilename: C:\\Windows\\Prefetch\\WHOAMI.EXE-9D378AFE.pf\r\nCreationUtcTime: 2026-03-03 03:36:28.881\r\nUser: NT AUTHORITY\\SYSTEM\"",
+                                    "version": "2",
+                                    "systemTime": "2026-03-09T02:29:18.2417741Z",
+                                    "eventRecordID": "50834",
+                                    "threadID": "4448",
+                                    "computer": "DESKTOP-NR6HCQ3",
+                                    "task": "11",
+                                    "processID": "2688",
+                                    "severityValue": "INFORMATION",
+                                    "providerName": "Microsoft-Windows-Sysmon"
+                                }
+                            }
+                        },
+                        "decoder": {
+                            "name": "windows_eventchannel"
+                        },
+                        "full_log": "{\"win\":{\"system\":{\"providerName\":\"Microsoft-Windows-Sysmon\",\"providerGuid\":\"{5770385f-c22a-43e0-bf4c-06f5698ffbd9}\",\"eventID\":\"11\",\"version\":\"2\",\"level\":\"4\",\"task\":\"11\",\"opcode\":\"0\",\"keywords\":\"0x8000000000000000\",\"systemTime\":\"2026-03-09T02:29:18.2417741Z\",\"eventRecordID\":\"50834\",\"processID\":\"2688\",\"threadID\":\"4448\",\"channel\":\"Microsoft-Windows-Sysmon/Operational\",\"computer\":\"DESKTOP-NR6HCQ3\",\"severityValue\":\"INFORMATION\",\"message\":\"\\\"File created:\\r\\nRuleName: technique_id=T1047,technique_name=File System Permissions Weakness\\r\\nUtcTime: 2026-03-09 02:29:18.234\\r\\nProcessGuid: {70e31e6c-25db-69ae-2400-000000000800}\\r\\nProcessId: 1576\\r\\nImage: C:\\\\\\\\Windows\\\\\\\\system32\\\\\\\\svchost.exe\\r\\nTargetFilename: C:\\\\\\\\Windows\\\\\\\\Prefetch\\\\\\\\WHOAMI.EXE-9D378AFE.pf\\r\\nCreationUtcTime: 2026-03-03 03:36:28.881\\r\\nUser: NT AUTHORITY\\\\\\\\SYSTEM\\\"\"},\"eventdata\":{\"ruleName\":\"technique_id=T1047,technique_name=File System Permissions Weakness\",\"utcTime\":\"2026-03-09 02:29:18.234\",\"processGuid\":\"{70e31e6c-25db-69ae-2400-000000000800}\",\"processId\":\"1576\",\"image\":\"C:\\\\\\\\\\\\\\\\Windows\\\\\\\\\\\\\\\\system32\\\\\\\\\\\\\\\\svchost.exe\",\"targetFilename\":\"C:\\\\\\\\\\\\\\\\Windows\\\\\\\\\\\\\\\\Prefetch\\\\\\\\\\\\\\\\WHOAMI.EXE-9D378AFE.pf\",\"creationUtcTime\":\"2026-03-03 03:36:28.881\",\"user\":\"NT AUTHORITY\\\\\\\\\\\\\\\\SYSTEM\"}}}",
+                        "input": {
+                            "type": "log"
+                        },
+                        "@timestamp": "2026-03-09T02:29:18.974Z",
+                        "location": "EventChannel",
+                        "id": "1773023358.17382103",
+                        "timestamp": "2026-03-09T10:29:18.974+0800"
+                    },
+                    "sort": [
+                        1773023358974
+                    ]
+                }
+            ]
+        }
+    },
+    "attribution_archives": {
+        "hits": {
+            "hits": [
+                {
+                    "_source": {
+                        "timestamp": "2026-04-07T18:41:35.042+0800",
+                        "agent": {"id": "005"},
+                        "rule": {
+                            "id": "92213",
+                            "level": 15,
+                            "description": "Executable file dropped in folder commonly used by malware",
+                            "mitre": {
+                                "id": ["T1105"],
+                                "tactic": ["Command and Control"]
+                            }
+                        },
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "11"},
+                                "eventdata": {
+                                    "processId": "2892",
+                                    "image": "C:\\\\Windows\\\\system32\\\\WerFault.exe",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "targetFilename": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\SilentProcessExit\\\\lsass.exe-(PID-712)-18670187\\\\lsass.exe-(PID-712).dmp"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "_source": {
+                        "timestamp": "2026-04-22T14:31:46.371+0800",
+                        "agent": {"id": "005"},
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "7"},
+                                "eventdata": {
+                                    "processId": "1664",
+                                    "image": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "originalFileName": "CertUtil.exe",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "imageLoaded": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "signed": "true"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "_source": {
+                        "timestamp": "2026-04-22T14:31:46.365+0800",
+                        "agent": {"id": "005"},
+                        "rule": {
+                            "id": "92016",
+                            "level": 13,
+                            "description": "Masqueraded CertUtil.exe with a different file name. Possible use to decode malware",
+                            "mitre": {
+                                "id": ["T1036.003", "T1140"],
+                                "tactic": ["Defense Evasion"]
+                            }
+                        },
+                        "data": {
+                            "win": {
+                                "system": {"eventID": "1"},
+                                "eventdata": {
+                                    "processId": "2964",
+                                    "image": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp",
+                                    "commandLine": "C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\tcm.tmp  -encode C:\\\\Windows\\\\System32\\\\calc.exe C:\\\\Users\\\\defin\\\\AppData\\\\Local\\\\Temp\\\\T1140_calc2.txt",
+                                    "parentProcessId": "4436",
+                                    "parentImage": "C:\\\\Windows\\\\System32\\\\cmd.exe",
+                                    "parentCommandLine": "\\\"cmd.exe\\\" /c copy %windir%\\\\system32\\\\certutil.exe %temp%\\\\tcm.tmp &amp; %temp%\\\\tcm.tmp -encode C:\\\\Windows\\\\System32\\\\calc.exe %temp%\\\\T1140_calc2.txt &amp; %temp%\\\\tcm.tmp -decode %temp%\\\\T1140_calc2.txt %temp%\\\\T1140_calc2_decoded.exe",
+                                    "originalFileName": "CertUtil.exe",
+                                    "integrityLevel": "High",
+                                    "user": "DESKTOP-NR6HCQ3\\\\defin",
+                                    "parentUser": "DESKTOP-NR6HCQ3\\\\defin"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
     }
 }

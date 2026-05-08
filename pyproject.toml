@@ -12,6 +12,7 @@ description = "An AI agent interacting with Wazuh API"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.116.1",
     "langchain>=1.2.6",
     "langchain-core>=1.2.7",
     "langchain-huggingface>=1.2.0",
@@ -20,11 +21,16 @@ dependencies = [
     "langgraph>=1.0.6",
     "pinecone>=8.0.0",
     "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
     "requests>=2.32.5",
     "sentence-transformers>=5.2.2",
+    "uvicorn>=0.40.0",
 ]
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
+
+[project.scripts]
+wazuh-topology-api = "service.topology_service:main"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -34,7 +40,7 @@ include = [
 exclude = []
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/core", "src/wazuh_api", "src/agents"]
+packages = ["src/core", "src/wazuh_api", "src/agents", "src/service"]
 
 # =========== Tool Configurations ============
 
@@ -93,4 +99,9 @@ ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::urllib3.exceptions.InsecureRequestWarning",
 ]

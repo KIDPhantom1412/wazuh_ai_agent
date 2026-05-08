@@ -1,9 +1,11 @@
 .coverage
 .env
-/.langgraph_api
-/.pytest_cache
-/.venv
-/.ruff_cache
-/.pytest_cache
+.langgraph_api
+.pytest_cache
+.venv
+.vscode
+.ruff_cache
+.pytest_cache
 *.pyc
-.idea/
+.idea
+package-lock.json

@@ -253,6 +253,7 @@ def run_logtest(log_event: str, token: str = None, location: str = None, log_for
         logger.error(f"Failed to run logtest: {response.text}")
     return response.json()
 
+
 if __name__ == "__main__":
     print(get_wazuh_server_api_info())
     # print(get_agents_status_summary())

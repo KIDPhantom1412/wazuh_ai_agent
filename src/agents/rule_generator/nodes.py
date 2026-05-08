@@ -3,7 +3,7 @@ import logging
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -158,7 +158,9 @@ def _format_manager_log_entry(item: dict[str, Any]) -> str:
     tag = item.get("tag") or item.get("component") or ""
     level = item.get("level") or ""
     description = item.get("description") or item.get("message") or item.get("log") or ""
-    return " | ".join(part for part in [str(timestamp), str(tag), str(level), str(description)] if part).strip()
+    return " | ".join(
+        part for part in [str(timestamp), str(tag), str(level), str(description)] if part
+    ).strip()
 
 
 def _parse_manager_log_timestamp(item: dict[str, Any]) -> datetime | None:
@@ -176,8 +178,8 @@ def _parse_manager_log_timestamp(item: dict[str, Any]) -> datetime | None:
         return None
 
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _get_server_utc_timestamp() -> datetime | None:
@@ -205,8 +207,8 @@ def _get_server_utc_timestamp() -> datetime | None:
         return None
 
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _find_rule_load_issues(
@@ -231,7 +233,9 @@ def _find_rule_load_issues(
             str(item.get("level", "")),
         ]
         combined = " ".join(haystacks).lower()
-        matched_rule_id = any(f"rule '{rid}'" in combined or f"rule {rid}" in combined for rid in rule_ids)
+        matched_rule_id = any(
+            f"rule '{rid}'" in combined or f"rule {rid}" in combined for rid in rule_ids
+        )
         matched_filename = lowered_filename in combined if lowered_filename else False
 
         if matched_rule_id or matched_filename:
@@ -432,9 +436,12 @@ def _compact_agentless_config(agentless_config: Any) -> dict[str, Any]:
         return {
             "enabled": data.get("enabled"),
             "interval": data.get("interval"),
-            "hosts_count": len(data.get("hosts", [])) if isinstance(data.get("hosts"), list) else None,
+            "hosts_count": (
+                len(data.get("hosts", [])) if isinstance(data.get("hosts"), list) else None
+            ),
         }
     return {"raw": data}
+
 
 # --- Data Models for Parsing ---
 
@@ -442,7 +449,7 @@ def _compact_agentless_config(agentless_config: Any) -> dict[str, Any]:
 class RuleRequirements(BaseModel):
     agent_id: str | list[str] | None = Field(
         default=None,
-        description="Target agent ID(s) (e.g., '001', ['001','004'], or 'all'). Optional if scope is clear or agentless."
+        description="Target agent ID(s) (e.g., '001', ['001','004'], or 'all'). Optional if scope is clear or agentless.",
     )
     agent_name: str | list[str] | None = Field(
         default=None, description="Target agent name(s) (maps to fixed field agent.name)."
@@ -452,7 +459,7 @@ class RuleRequirements(BaseModel):
     )
     scope: str | None = Field(
         default=None,
-        description="Description of the target scope (e.g., 'all agents', 'specific agent 001', 'agentless device 192.168.1.1')."
+        description="Description of the target scope (e.g., 'all agents', 'specific agent 001', 'agentless device 192.168.1.1').",
     )
     time_range: str = Field(
         default="now-24h",
@@ -526,9 +533,7 @@ def environment_perception_node(state: RuleGeneratorState, config: RunnableConfi
         agentless_config = get_config_agentless()
         server_info = get_wazuh_server_api_info()
         server_timestamp_value = server_info.get("data", {}).get("timestamp", "")
-        server_timestamp = (
-            server_timestamp_value if isinstance(server_timestamp_value, str) else ""
-        )
+        server_timestamp = server_timestamp_value if isinstance(server_timestamp_value, str) else ""
 
         env_info = {
             "agents_overview": _compact_agents_overview(agents_overview),
@@ -553,9 +558,7 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     user_input = messages[-1].content if messages else ""
     user_input_history = (state.get("user_input_history") or []) + [user_input]
     user_input_history = user_input_history[-8:]
-    history_text = "\n".join(
-        [f"{idx + 1}. {item}" for idx, item in enumerate(user_input_history)]
-    )
+    history_text = "\n".join([f"{idx + 1}. {item}" for idx, item in enumerate(user_input_history)])
 
     generated_rule = state.get("generated_rule")
     logtest_passed = state.get("logtest_passed")
@@ -601,32 +604,34 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
                 "format_instructions": parser.get_format_instructions(),
             }
         )
-        
+
         updates = {
             "decision": result.next_step,
             "user_input_history": user_input_history,
         }
-        
+
         if result.next_step == "extract_requirements" and not generated_rule and not logtest_passed:
             # Reset stale state before starting a fresh generation flow.
-            updates.update({
-                "missing_parameters": None,
-                "logs_preview": [],
-                "raw_logs": [],
-                "log_analysis": None,
-                "is_feasible": None,
-                "infeasibility_reason": None,
-                "generated_rule": None,
-                "verification_rule_content": None,
-                "temp_json_rule_ids": [],
-                "rule_id": None,
-                "rule_filename": None,
-                "validation_error": None,
-                "last_validation_error": None,
-                "logtest_passed": None,
-                "verification_feedback": None,
-            })
-            
+            updates.update(
+                {
+                    "missing_parameters": None,
+                    "logs_preview": [],
+                    "raw_logs": [],
+                    "log_analysis": None,
+                    "is_feasible": None,
+                    "infeasibility_reason": None,
+                    "generated_rule": None,
+                    "verification_rule_content": None,
+                    "temp_json_rule_ids": [],
+                    "rule_id": None,
+                    "rule_filename": None,
+                    "validation_error": None,
+                    "last_validation_error": None,
+                    "logtest_passed": None,
+                    "verification_feedback": None,
+                }
+            )
+
         return updates
     except Exception:
         return {"decision": "unknown", "user_input_history": user_input_history}
@@ -754,9 +759,7 @@ def log_retrieval_feasibility_node(
     append_scope_filter("agent.name", reqs.get("agent_name"))
     append_scope_filter("agent.ip", reqs.get("agent_ip"))
     agent_id = reqs.get("agent_id")
-    if not (
-        isinstance(agent_id, str) and agent_id.strip().lower() == "all"
-    ) and not (
+    if not (isinstance(agent_id, str) and agent_id.strip().lower() == "all") and not (
         isinstance(agent_id, list) and any(str(item).strip().lower() == "all" for item in agent_id)
     ):
         append_scope_filter("agent.id", agent_id)
@@ -777,7 +780,9 @@ def log_retrieval_feasibility_node(
             if not isinstance(source, dict):
                 return {}
             data_obj = source.get("data", {}) if isinstance(source.get("data"), dict) else {}
-            decoder_obj = source.get("decoder", {}) if isinstance(source.get("decoder"), dict) else {}
+            decoder_obj = (
+                source.get("decoder", {}) if isinstance(source.get("decoder"), dict) else {}
+            )
             rule_obj = source.get("rule", {}) if isinstance(source.get("rule"), dict) else {}
             result = {
                 "agent": source.get("agent"),
@@ -792,15 +797,13 @@ def log_retrieval_feasibility_node(
                     "decoder_name": decoder_obj.get("name"),
                     "rule_id": rule_obj.get("id"),
                     "rule_level": rule_obj.get("level"),
-                    "data_top_keys": list(data_obj.keys())[:8] if isinstance(data_obj, dict) else [],
+                    "data_top_keys": (
+                        list(data_obj.keys())[:8] if isinstance(data_obj, dict) else []
+                    ),
                     "sample_fields": _collect_scalar_fields(data_obj, prefix="data"),
                 },
             }
-            return {
-                key: value
-                for key, value in result.items()
-                if value not in (None, "", {}, [])
-            }
+            return {key: value for key, value in result.items() if value not in (None, "", {}, [])}
 
         compact_hits = []
         for hit in raw_hits[:10]:
@@ -988,9 +991,7 @@ If no relevant logs are found or data is insufficient, return feasible=False and
             }
         )
 
-        enriched_analysis = (
-            f"{result.log_features}\n\nSearch attempts summary:\n{json.dumps(attempts, ensure_ascii=False)}"
-        )
+        enriched_analysis = f"{result.log_features}\n\nSearch attempts summary:\n{json.dumps(attempts, ensure_ascii=False)}"
         return {
             "logs_preview": logs,
             "raw_logs": raw_logs,
@@ -1009,9 +1010,7 @@ If no relevant logs are found or data is insufficient, return feasible=False and
         }
 
 
-def rule_generation_node(
-    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
-):
+def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
     """Step S4: Rule Generation."""
     logger.info("Executing Rule Generation Node")
 
@@ -1023,9 +1022,7 @@ def rule_generation_node(
     raw_logs = state.get("raw_logs", [])
     validation_error = state.get("validation_error", "")
     user_input_history = (state.get("user_input_history") or [])[-8:]
-    user_context = "\n".join(
-        [f"{idx + 1}. {item}" for idx, item in enumerate(user_input_history)]
-    )
+    user_context = "\n".join([f"{idx + 1}. {item}" for idx, item in enumerate(user_input_history)])
 
     raw_logs_for_generation = []
     for item in raw_logs:
@@ -1121,7 +1118,9 @@ Do not add explanations, comments, or markdown fences."""
         generated_xml = _extract_xml_block(result_text if isinstance(result_text, str) else "")
         rule_id, rule_description = _extract_generated_rule_metadata(generated_xml)
         if _rule_exists(rule_id):
-            raise ValueError(f"Generated rule id {rule_id} already exists in the loaded manager ruleset.")
+            raise ValueError(
+                f"Generated rule id {rule_id} already exists in the loaded manager ruleset."
+            )
 
         referenced_rule_ids = _extract_referenced_rule_ids(generated_xml)
         missing_references: list[str] = []
@@ -1165,9 +1164,7 @@ Do not add explanations, comments, or markdown fences."""
         }
 
 
-def rule_verification_node(
-    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
-):
+def rule_verification_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
     """Step S5: Rule Application & Verification."""
     logger.info("Executing Rule Verification Node")
 
@@ -1342,7 +1339,9 @@ def rule_verification_node(
             "matched_ids": matched_ids,
             "last_output": last_output,
         }
-        logger.error(f"Logtest verification failed: {json.dumps(failure_details, ensure_ascii=False)}")
+        logger.error(
+            f"Logtest verification failed: {json.dumps(failure_details, ensure_ascii=False)}"
+        )
         return {
             "logtest_passed": False,
             "validation_error": f"Logtest failed after trying {attempted} sample log(s). Expected rule IDs {sorted(expected_rule_ids)}, matched IDs: {matched_ids}. Last output: {json.dumps(last_output, ensure_ascii=False)}",
@@ -1419,7 +1418,11 @@ Instructions:
         logger.error(f"Error extracting cleanup target: {e}")
         return {"verification_feedback": f"Error parsing cleanup target: {e}"}
 
-    filename = extraction.filename.strip() if isinstance(extraction.filename, str) and extraction.filename.strip() else None
+    filename = (
+        extraction.filename.strip()
+        if isinstance(extraction.filename, str) and extraction.filename.strip()
+        else None
+    )
     rule_id = extraction.rule_id if isinstance(extraction.rule_id, int) else None
 
     if not filename and rule_id is not None:
@@ -1437,7 +1440,9 @@ Instructions:
             target_text = f"filename={filename}"
             if rule_id is not None:
                 target_text += f", rule_id={rule_id}"
-            return {"verification_feedback": f"Rule file deleted and manager restarted. ({target_text})"}
+            return {
+                "verification_feedback": f"Rule file deleted and manager restarted. ({target_text})"
+            }
         except Exception as e:
             logger.error(f"Error in cleanup: {e}")
             return {"verification_feedback": f"Error cleaning up {filename}: {e}"}
@@ -1489,7 +1494,9 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         )
         return {"messages": [AIMessage(content=content)]}
     elif validation_error:
-        if isinstance(validation_error, str) and validation_error.startswith("Error generating rule:"):
+        if isinstance(validation_error, str) and validation_error.startswith(
+            "Error generating rule:"
+        ):
             prompt_text = (
                 "There was an error while regenerating the rule after a previous validation failure. "
                 f"The latest generation attempt failed with: {validation_error}. "

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "000",
+    "name": "xie-VMware-Virtual-Platform",
+    "ip": "127.0.0.1",
+    "status": "active",
+    "has_threat": false,
+    "threat_info": "",
+    "threat_level": 0
+  },
+  {
+    "id": "001",
+    "name": "agent-VMware-Virtual-Platform",
+    "ip": "192.168.74.131",
+    "status": "disconnected",
+    "has_threat": false,
+    "threat_info": "",
+    "threat_level": 0
+  },
+  {
+    "id": "002",
+    "name": "windows001",
+    "ip": "192.168.74.128",
+    "status": "disconnected",
+    "has_threat": false,
+    "threat_info": "",
+    "threat_level": 0
+  }
+]

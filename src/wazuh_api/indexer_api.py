@@ -2,6 +2,7 @@ import json
 import logging
 
 import requests
+import urllib3
 from requests.auth import HTTPBasicAuth
 
 from core.config import settings
@@ -13,6 +14,8 @@ host = settings.WAZUH_SERVER_API_HOST
 port = settings.WAZUH_INDEXER_PORT
 username = settings.WAZUH_INDEXER_USER
 password = settings.WAZUH_INDEXER_PASSWORD
+
+urllib3.disable_warnings()
 
 
 def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
@@ -39,7 +42,7 @@ def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
     return response.json()
 
 
-def agent_alerts(agent_id, x_limit=5, ruleId=-1):
+def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     logger.info("Getting alerts information")
 
     url = f"{protocol}://{host}:{port}/wazuh-alerts-*/_search"
@@ -59,16 +62,95 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1):
         "sort": [{"timestamp": {"order": "desc"}}],
     }
 
-    response = requests.post(
-        url,
-        auth=HTTPBasicAuth(username, password),
-        headers=headers,
-        data=json.dumps(payload),
-        verify=False,
-    )
+    try:
+        response = requests.post(
+            url,
+            auth=HTTPBasicAuth(username, password),
+            headers=headers,
+            data=json.dumps(payload),
+            verify=False,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.exceptions.Timeout as e:
+        logger.exception(f"Timeout querying alerts for Agent: {agent_id}")
+        raise e
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"Request error querying alerts for Agent: {agent_id}")
+        raise e
 
     logger.info(f"Get alerts response from Agent: {agent_id} successfully")
-    return response.json()
+    return result
+
+
+def agent_archives(
+    agent_id, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None
+):
+    logger.info("Getting archives information")
+
+    url = f"https://{host}:9200/wazuh-archives-*/_search"
+    headers = {"Content-Type": "application/json"}
+
+    if payload is None:
+        # 1. 初始化基础查询：必须匹配特定的 Agent ID
+        must_conditions = [{"term": {"agent.id": agent_id}}]
+
+        # 2. 追加关键词搜索功能
+        if keyword and (keyword != ""):
+            # 去除用户可能自己多加的前后空格
+            clean_keyword = keyword.strip()
+
+            if " " in clean_keyword:
+                # 场景 A: 关键词包含空格
+                # 必须使用短语匹配，强制加上转义的双引号，且绝对不加通配符 *
+                # 如果用户已经自己加了引号，先去掉再包，防止嵌套错误
+                clean_keyword = clean_keyword.strip('"').strip("'")
+                must_conditions.append({"query_string": {"query": f'"{clean_keyword}"'}})
+            else:
+                # 场景 B: 关键词是不带空格的单字
+                # 可以安全地使用通配符模糊匹配
+                if not clean_keyword.startswith("*"):
+                    must_conditions.append({"query_string": {"query": f"*{clean_keyword}*"}})
+                else:
+                    must_conditions.append({"query_string": {"query": f"{clean_keyword}"}})
+
+        # 3. 追加时间范围过滤
+        time_range = {}
+        if start_time:
+            time_range["gte"] = start_time
+        if end_time:
+            time_range["lte"] = end_time
+        if time_range:
+            must_conditions.append({"range": {"timestamp": time_range}})
+
+        # 4. 构建完整的 DSL Payload
+        payload = {
+            "size": x_limit,
+            "query": {"bool": {"must": must_conditions}},
+            "sort": [{"timestamp": {"order": "desc"}}],
+        }
+
+    try:
+        response = requests.post(
+            url,
+            auth=HTTPBasicAuth(username, password),
+            headers=headers,
+            data=json.dumps(payload),
+            verify=False,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.exceptions.Timeout as e:
+        logger.exception(f"Timeout querying archives for Agent: {agent_id}")
+        raise e
+    except requests.exceptions.RequestException as e:
+        logger.exception(f"Request error querying archives for Agent: {agent_id}")
+        raise e
+
+    logger.info(f"Get archives rom Agent: {agent_id} successfully")
+    return result
 
 
 def search_archived_logs(query_body: dict):
@@ -110,3 +192,17 @@ if __name__ == "__main__":
         print(f"时间戳：{alert.get('predecoder',{}).get('timestamp')}")
         print(f"规则 ID: {alert.get('rule',{}).get('id')}")
         print(f"描述: {alert.get('rule', {}).get('description')}")
+
+    # 测试 agent_archives
+    # search_keyword = "whoami"
+    search_keyword = "wevtutil cl System"
+    search_response = agent_archives("005", keyword=search_keyword, x_limit=1)
+    hits = search_response.get("hits", {}).get("hits", [])
+    archives = [hit["_source"] for hit in hits]
+    print(f"\n获取到 {len(archives)} 条归档记录:")
+    for i, archive in enumerate(archives):
+        print("*" * 20)
+        print(f"归档记录 #{i + 1}")
+        print(f"时间戳：{archive.get('timestamp')}")
+        print(f"规则 ID: {archive.get('rule',{}).get('id')}")
+        print(f"描述: {archive.get('rule', {}).get('description')}")

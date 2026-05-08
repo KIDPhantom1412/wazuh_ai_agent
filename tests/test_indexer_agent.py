@@ -3,7 +3,6 @@ from agentevals.trajectory.match import create_trajectory_match_evaluator
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
-from agents.indexer_agent import get_indexer_agent
 from core.config import settings
 
 
@@ -17,12 +16,15 @@ def demo_model():
 
 
 def test_indexer_agent(demo_model):
-    agent = get_indexer_agent(demo_model)
 
     # test1
     evaluator = create_trajectory_match_evaluator(
         trajectory_match_mode="strict",
     )
+
+    from agents.indexer_agent import get_indexer_agent
+
+    agent = get_indexer_agent(demo_model)
 
     result = agent.invoke(
         {"messages": [HumanMessage(content="过去1小时内agent id为001的agent产生多少警告?")]}

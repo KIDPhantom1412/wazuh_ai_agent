@@ -1,26 +1,17 @@
-print("Script started")
 import os
 import sys
 from unittest.mock import MagicMock, patch
 
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
-print("Path added")
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-
-print("LangChain imported")
 
 # Mock wazuh_api before importing nodes
 sys.modules["wazuh_api"] = MagicMock()
 sys.modules["wazuh_api.server_api"] = MagicMock()
 sys.modules["wazuh_api.indexer_api"] = MagicMock()
-print("Modules mocked")
-
-from agents.rule_generator.rule_generator import get_rule_generator_agent
-
-print("Agent imported")
 
 
 class MockModel(BaseChatModel):
@@ -32,8 +23,6 @@ class MockModel(BaseChatModel):
 
         # Mock responses based on context (simplified)
         system_prompt = str(messages[0].content)
-        print(f"DEBUG: System Prompt: {system_prompt[:50]}...")
-
         if "extract necessary parameters" in system_prompt:
             content = '{"agent_id": "001", "time_range": "now-24h", "filters": {}, "event_type": "ssh_failed", "description": "SSH failed", "missing_parameters": []}'
         elif "Analyze the following retrieved logs" in system_prompt:
@@ -64,12 +53,12 @@ class MockModel(BaseChatModel):
 
 
 def test_graph():
-    print("Test graph started")
+    from agents.rule_generator.rule_generator import get_rule_generator_agent
+
     model = MockModel()
     app = get_rule_generator_agent(model)
 
     # Test 1: Initial Request
-    print("--- Test 1: Initial Request ---")
     initial_state = {
         "messages": [HumanMessage(content="Create a rule for SSH failure on agent 001")]
     }
@@ -91,11 +80,7 @@ def test_graph():
     ):
 
         result = app.invoke(initial_state)
-        print("Final State Keys:", result.keys())
-        print("Generated Rule:", result.get("generated_rule"))
-
         # Test 2: Verify Rule (Simulate user saying "Yes")
-        print("\n--- Test 2: Verify Rule ---")
         state_with_rule = result.copy()
         state_with_rule["messages"].append(HumanMessage(content="Yes, verify it."))
 
@@ -108,18 +93,4 @@ def test_graph():
                 return_value={"data": {"output": {"rule": {"id": 110001}}}},
             ),
         ):
-
-            result_verify = app.invoke(state_with_rule)
-            print("Logtest Passed:", result_verify.get("logtest_passed"))
-            print("Final Message:", result_verify["messages"][-1].content)
-
-
-if __name__ == "__main__":
-    try:
-        test_graph()
-        print("\nTest finished successfully.")
-    except Exception as e:
-        print(f"\nTest failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+            app.invoke(state_with_rule)
