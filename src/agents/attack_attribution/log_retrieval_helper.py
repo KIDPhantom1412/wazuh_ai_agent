@@ -21,6 +21,8 @@ class QueryType(str, Enum):
     SERVICE_NAME = "SERVICE_NAME"
     USER_ACCOUNT = "USER_ACCOUNT"
     REGISTRY_PATH = "REGISTRY_PATH"
+    LOGON_ID = "LOGON_ID"
+    SECURITY_ID = "SECURITY_ID"
 
 
 @tool
@@ -165,6 +167,9 @@ def simplify_log(source):
         "protocol",
         "ipAddress",
         "ipPort",
+        "subjectLogonId",
+        "targetLogonId",
+        "logonId",
         # --- 4. 文件与模块加载 (Event 7, 11) ---
         "targetFilename",
         "imageLoaded",
@@ -186,6 +191,20 @@ def simplify_log(source):
         "eventType",  # 动作类型：如 CreateKey, DeleteKey, SetValue, RenameKey
         "targetObject",  # 目标对象：被操作的完整注册表路径
         "details",  # 具体细节：写入注册表的具体值
+        # --- 8. 账号与组安全审计 (Event 4722, 4724, 4732, 4738, 4798) ---
+        "subjectUserName",  # 执行操作的账号名
+        "subjectUserSid",  # 执行操作者的安全标识符 (SID)
+        "targetSid",  # 目标账户或目标组的 SID
+        "memberSid",  # 被加入组的成员 SID (Event 4732 核心，用于判定提权对象)
+        "callerProcessName",  # 调用枚举的完整进程路径 (Event 4798 核心)
+        "callerProcessId",  # 发起调用的进程 ID
+        "samAccountName",  # 目标 SAM 账户名
+        "passwordLastSet",  # 密码最后被设置的时间 (直观反映 Event 4724 的重置结果)
+        "oldUacValue",  # 修改前的用户账户控制位 (UAC) 标志
+        "newUacValue",  # 修改后的 UAC 标志 (通过比对可得知账户是被激活还是禁用)
+        "userAccountControl",  # 直观的 UAC 状态文本描述
+        "scriptPath",  # 登录脚本路径 (攻击者可能通过修改脚本实现持久化)
+        "profilePath",  # 配置文件路径
     ]
 
     eventdata_out = {
@@ -218,6 +237,30 @@ def _format_iso8601(ts_raw: str) -> str:
     return ts_iso
 
 
+def _normalize_pid_values(pid_raw: str) -> tuple[str, str]:
+    s = str(pid_raw).strip().strip("'\"")
+    if not s:
+        return s, s
+
+    s_lower = s.lower()
+    n = None
+    try:
+        if s_lower.startswith("0x"):
+            n = int(s_lower, 16)
+        else:
+            try:
+                n = int(s_lower, 10)
+            except ValueError:
+                n = int(s_lower, 16)
+    except Exception:
+        n = None
+
+    if n is None:
+        return s, s_lower
+
+    return str(n), f"0x{n:x}"
+
+
 def search_archives_by_eventid(
     agent_id: str,
     query_type: str,
@@ -247,15 +290,20 @@ def search_archives_by_eventid(
 
     # 3. 动态字段映射逻辑
     if query_type == QueryType.PROCESS_ID:
+        pid_dec, pid_hex = _normalize_pid_values(val_str)
         type_conditions = [
-            {"term": {"data.win.eventdata.processId": val_str}},
-            {"term": {"data.win.eventdata.sourceProcessId": val_str}},
-            {"term": {"data.win.eventdata.targetProcessId": val_str}},
+            {"term": {"data.win.eventdata.processId": pid_dec}},
+            {"term": {"data.win.eventdata.sourceProcessId": pid_dec}},
+            {"term": {"data.win.eventdata.targetProcessId": pid_dec}},
+            {"term": {"data.win.eventdata.callerProcessId": pid_hex}},
         ]
+
     elif query_type == QueryType.PARENT_PROCESS_ID:
+        pid_dec, _ = _normalize_pid_values(val_str)
         type_conditions = [
-            {"term": {"data.win.eventdata.parentProcessId": val_str}},
+            {"term": {"data.win.eventdata.parentProcessId": pid_dec}},
         ]
+
     elif query_type == QueryType.FILE_PATH:
         # 基于 query_string 实现模糊匹配
         query_str = f"*{val_str}*"
@@ -271,6 +319,8 @@ def search_archives_by_eventid(
                         "data.win.eventdata.targetFilename",
                         "data.win.eventdata.imagePath",
                         "data.win.eventdata.commandLine",
+                        "data.win.eventdata.callerProcessName",
+                        "data.win.eventdata.scriptPath",
                     ],
                 }
             }
@@ -310,6 +360,8 @@ def search_archives_by_eventid(
                         "data.win.eventdata.targetUser",
                         "data.win.eventdata.accountName",
                         "data.win.eventdata.targetUserName",
+                        "data.win.eventdata.subjectUserName",
+                        "data.win.eventdata.samAccountName",
                     ],
                 }
             }
@@ -320,6 +372,21 @@ def search_archives_by_eventid(
         query_str = f"*{val_str}*"
         type_conditions = [
             {"query_string": {"query": query_str, "fields": ["data.win.eventdata.targetObject"]}}
+        ]
+
+    elif query_type == QueryType.LOGON_ID:
+        val_str = val_str.lower()
+        type_conditions = [
+            {"term": {"data.win.eventdata.subjectLogonId": val_str}},
+            {"term": {"data.win.eventdata.targetLogonId": val_str}},
+            {"term": {"data.win.eventdata.logonId": val_str}},
+        ]
+
+    elif query_type == QueryType.SECURITY_ID:
+        type_conditions = [
+            {"term": {"data.win.eventdata.subjectUserSid": val_str}},
+            {"term": {"data.win.eventdata.targetSid": val_str}},
+            {"term": {"data.win.eventdata.memberSid": val_str}},
         ]
 
     # 将 OR (should) 逻辑挂载到主查询中
@@ -363,24 +430,29 @@ def get_archives_by_eventid(
         - "SERVICE_NAME" : 按注册的系统服务名称追踪。
         - "USER_ACCOUNT" : 按操作系统用户或服务账号追踪。
         - "REGISTRY_PATH" : 按注册表路径追踪。
+        - "LOGON_ID" : 按登录会话 ID 追踪。
+        - "SECURITY_ID" : 按安全标识符 (SID) 追踪。
     :param query_value: 【必填】与 query_type 对应的具体数值。样例说明：
-        - 若为 PROCESS_ID 或 PARENT_PROCESS_ID: 传入pid "6536"
+        - 若为 PROCESS_ID 或 PARENT_PROCESS_ID: 传入pid "6536" 或 "0x1d26"
         - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\"
         - 若为 IP_ADDRESS: 传入 "192.168.1.50"
         - 若为 PORT: 传入 "2024"
         - 若为 SERVICE_NAME: 传入"WMI"
         - 若为 USER_ACCOUNT: 传入 "LocalSystem", "Administrator"
         - 若为 REGISTRY_PATH: 传入 "CurrentControlSet\\Services\\bam" 或 "Run"
+        - 若为 LOGON_ID: 传入 "0x1ed26"
+        - 若为 SECURITY_ID: 传入完整 SID "S-1-5-21-..."
     :param event_ids: 【必填】目标 EventID 列表。请严格根据调查意图在下面给出的类型中选择对应的类别：
-        - ["1"]              : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
-        - ["3","4624"]       : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
-        - ["7"]              : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
-        - ["8"]              : 进程注入行为 (Process Injection) - 用于检测 CreateRemoteThread 等跨进程的高危代码注入或执行规避动作。
-        - ["10"]             : 进程访问行为(Process Access) - 用于检测一个进程尝试打开另一个进程句柄以进行内存读写或状态控制的行为。
-        - ["11"]             : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
-        - ["25"]             : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
-        - ["7045"]           : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
-        - ["12", "13", "14"] : 注册表行为 (Registry) - 用于检测注册表修改、删除或创建等操作。
+        - ["1"]                    : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
+        - ["3","4624"]             : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
+        - ["7"]                    : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
+        - ["8"]                    : 进程注入行为 (Process Injection) - 用于检测 CreateRemoteThread 等跨进程的高危代码注入或执行规避动作。
+        - ["10"]                   : 进程访问行为(Process Access) - 用于检测一个进程尝试打开另一个进程句柄以进行内存读写或状态控制的行为。
+        - ["11"]                   : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
+        - ["25"]                   : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
+        - ["7045"]                 : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
+        - ["12", "13", "14"]       : 注册表行为 (Registry) - 用于检测注册表修改、删除或创建等操作。
+        - ["4722", "4724", "4732", "4738", "4798"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
     :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """
