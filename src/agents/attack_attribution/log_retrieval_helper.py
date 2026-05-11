@@ -191,7 +191,7 @@ def simplify_log(source):
         "eventType",  # 动作类型：如 CreateKey, DeleteKey, SetValue, RenameKey
         "targetObject",  # 目标对象：被操作的完整注册表路径
         "details",  # 具体细节：写入注册表的具体值
-        # --- 8. 账号与组安全审计 (Event 4722, 4724, 4732, 4738, 4798) ---
+        # --- 8. 账号与组安全审计 (Event 47**) ---
         "subjectUserName",  # 执行操作的账号名
         "subjectUserSid",  # 执行操作者的安全标识符 (SID)
         "targetSid",  # 目标账户或目标组的 SID
@@ -205,6 +205,7 @@ def simplify_log(source):
         "userAccountControl",  # 直观的 UAC 状态文本描述
         "scriptPath",  # 登录脚本路径 (攻击者可能通过修改脚本实现持久化)
         "profilePath",  # 配置文件路径
+        "primaryGroupId",  # 主组 ID
     ]
 
     eventdata_out = {
@@ -452,7 +453,7 @@ def get_archives_by_eventid(
         - ["25"]                   : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
         - ["7045"]                 : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
         - ["12", "13", "14"]       : 注册表行为 (Registry) - 用于检测注册表修改、删除或创建等操作。
-        - ["4722", "4724", "4732", "4738", "4798"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
+        - ["4720", "4722", "4724", "4725", "4726", "4728", "4732", "4738", "4740", "4798", "4704", "4719"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
     :param start_time: (可选) 限定查询时间窗口的起始时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     :param end_time: (可选) 限定查询时间窗口的结束时间。时间需要转换为标准的 ISO8601 格式 (如 "2026-03-09T17:24:47Z")
     """

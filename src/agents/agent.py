@@ -24,14 +24,6 @@ custom_http_client = httpx.Client(
     )
 )
 
-# model_attribution = ChatOpenAI(
-#     model=settings.TEST_LLM_MODEL,
-#     api_key=settings.TEST_LLM_API_KEY,
-#     base_url=settings.TEST_LLM_BASE_URL,
-#     http_client=custom_http_client,
-#     model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},  # 禁用思考模式
-# )
-
 llm_attribution_params = {
     "model": settings.TEST_LLM_MODEL,
     "api_key": settings.TEST_LLM_API_KEY,

@@ -127,7 +127,9 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                - If the input was a raw log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese.
                - If the input was ALREADY a natural language clue: Polish it slightly for professional tone, ensuring it retains all original facts.
             3. TIME WINDOW & ZONE RULE (CRITICAL):
-               - (Timezone Normalization): Normalize the raw timestamp into Beijing Time (UTC+8). If the log is in UTC (e.g., ends with 'Z'), you must manually add 8 hours. If it already contains "+0800" or lacks a timezone, treat it as Beijing Time.
+               -  (Timezone Normalization): You MUST normalize the event time to Beijing Time (UTC+8). 
+                 * SPECIAL RULE FOR `utcTime`: If you extract the time from a field named `utcTime` (e.g., `data.win.eventdata.utcTime` like "2026-05-11 10:18:24.763"), this value is STRICTLY in UTC despite lacking a 'Z' or timezone suffix. You MUST manually add 8 hours to this time to convert it to Beijing Time.
+                 * For other timestamps: If it ends in 'Z', add 8 hours. If it contains "+0800", it is already Beijing Time. If it completely lacks a timezone and is not named `utcTime`, assume Beijing Time.
                - (Window Calculation): Create a 20-minute investigation window (+/- 10 mins) around the log time. Calculate the start time by subtracting 10 minutes, and the end time by adding 10 minutes. (For example, if the log's actual time is 10:16:35, your time boundary MUST be from 10:11:35 to 10:31:35).
                - Output this window directly into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format (e.g., '2026-04-27T17:15:00+08:00'). DO NOT convert to UTC.
                - (Formatting): In ALL cases, you MUST explicitly append "（北京时间）" to the time boundary in your generated 'refined_clue'.
