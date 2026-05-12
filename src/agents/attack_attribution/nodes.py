@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from .log_retrieval_helper import get_archives_by_eventid, get_archives_by_keyword
 from .prompt import attribution_investigation_prompt_long
 from .state import AttributionPlannerActionCommand, AttributionState
-from .utils import load_mitre, load_skill
+from .utils import extract_beijing_time_from_logs, load_mitre, load_skill
 
 # from .utils import extract_agent_ip_mapping
 
@@ -111,6 +111,14 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         if not investigation_clue:
             logger.info("Phase 1: Analyzing initial input...")
 
+            # 代码层提取 fields.@timestamp 并转为北京时间，不再依赖 LLM 判断时区
+            precomputed_time = extract_beijing_time_from_logs(user_text)
+            time_context = ""
+            if precomputed_time:
+                time_context = (
+                    f"日志事件发生的北京时间为: {precomputed_time['beijing_display']}。\n"
+                )
+
             system_prompt = """
             You are a Cybersecurity Triage Expert.
             Analyze the user's input: is it a raw JSON/System log, or a clear natural language attack clue?
@@ -126,14 +134,13 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             2. Generate the `refined_clue` string:
                - If the input was a raw log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese.
                - If the input was ALREADY a natural language clue: Polish it slightly for professional tone, ensuring it retains all original facts.
-            3. TIME WINDOW & ZONE RULE (CRITICAL):
-               -  (Timezone Normalization): You MUST normalize the event time to Beijing Time (UTC+8). 
-                 * SPECIAL RULE FOR `utcTime`: If you extract the time from a field named `utcTime` (e.g., `data.win.eventdata.utcTime` like "2026-05-11 10:18:24.763"), this value is STRICTLY in UTC despite lacking a 'Z' or timezone suffix. You MUST manually add 8 hours to this time to convert it to Beijing Time.
-                 * For other timestamps: If it ends in 'Z', add 8 hours. If it contains "+0800", it is already Beijing Time. If it completely lacks a timezone and is not named `utcTime`, assume Beijing Time.
-               - (Window Calculation): Create a 20-minute investigation window (+/- 10 mins) around the log time. Calculate the start time by subtracting 10 minutes, and the end time by adding 10 minutes. (For example, if the log's actual time is 10:16:35, your time boundary MUST be from 10:11:35 to 10:31:35).
-               - Output this window directly into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format (e.g., '2026-04-27T17:15:00+08:00'). DO NOT convert to UTC.
-               - (Formatting): In ALL cases, you MUST explicitly append "（北京时间）" to the time boundary in your generated 'refined_clue'.
+            3. TIME WINDOW (CRITICAL):
+               - If the system has pre-extracted a Beijing time window (see below), you MUST use it DIRECTLY for start_time_utc8 and end_time_utc8. Do NOT recalculate or reinterpret the timezone.
+               - If NO pre-extracted time window is provided, extract the time from the user's natural language input. Create a 20-minute investigation window (+/- 10 mins) around the stated time.
+               - Output into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format with +08:00 suffix (e.g., '2026-04-27T17:15:00+08:00').
+               - In ALL cases, append "（北京时间）" to the time boundary in 'refined_clue'.
 
+            {time_context}
             {format_instructions}
             """
 
@@ -142,7 +149,11 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
             )
 
             llm_msg = (prompt | model).invoke(
-                {"user_text": user_text, "format_instructions": format_instructions}
+                {
+                    "user_text": user_text,
+                    "time_context": time_context,
+                    "format_instructions": format_instructions,
+                }
             )
             raw_text = getattr(llm_msg, "content", str(llm_msg))
 
@@ -167,13 +178,21 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                 repaired_text = getattr(repaired, "content", str(repaired))
                 analysis = parser.parse(repaired_text)
 
+            # 代码预计算的时间优先，覆盖 LLM 输出（消除时区误判）
+            if precomputed_time:
+                derived_start = precomputed_time["beijing_start"]
+                derived_end = precomputed_time["beijing_end"]
+            else:
+                derived_start = analysis.start_time_utc8
+                derived_end = analysis.end_time_utc8
+
             if analysis.is_ready:
                 return {
                     **multi_host_updates,
                     "investigation_clue": analysis.refined_clue,
                     "default_agent_id": analysis.agent_id,
-                    "default_start_time": analysis.start_time_utc8,
-                    "default_end_time": analysis.end_time_utc8,
+                    "default_start_time": derived_start,
+                    "default_end_time": derived_end,
                     "is_clue_confirmed": True,
                     "next_action_fromDecisionNode": {"target": "Decision_Node"},
                     "next_action_fromAttributionPlannerNode": None,
@@ -183,8 +202,8 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                     **multi_host_updates,
                     "investigation_clue": analysis.refined_clue,
                     "default_agent_id": analysis.agent_id,
-                    "default_start_time": analysis.start_time_utc8,
-                    "default_end_time": analysis.end_time_utc8,
+                    "default_start_time": derived_start,
+                    "default_end_time": derived_end,
                     "pending_question_type": "CLUE",
                     "next_action_fromDecisionNode": {
                         "target": "User_Input_Node",
