@@ -11,8 +11,16 @@ node_modules
 .DS_Store
 dist
 dist-ssr
+.vite
 coverage
 *.local
+*.tsbuildinfo
+.env.development
+.env.production
+.env.local
+.env.*.local
+auto-imports.d.ts
+pnpm-workspace.yaml
 
 /cypress/videos/
 /cypress/screenshots/
