@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -319,6 +320,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
 
     messages = state.get("messages", [])
     mitre_kb = state.get("mitre_knowledge_base", {})
+    executed_queries = state.get("executed_queries") or []
     # 多主机场景相关逻辑已按需求暂时注释/禁用
     # is_multi_host = state.get("is_multi_host")
     # agent_ip_mapping = state.get("agent_ip_mapping") or {}
@@ -327,6 +329,34 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # )
 
     attribution_investigation_prompt: str = attribution_investigation_prompt_long
+
+    # --- build query fingerprint history table ---
+    if executed_queries:
+        rows = [
+            "| # | Agent | Tool | Type/Keyword | Value | EventIDs | Time Range | Logs |",
+            "|---|-------|------|-------------|-------|----------|------------|------|",
+        ]
+        for i, q in enumerate(executed_queries, 1):
+            agent = q.get("agent", "")
+            tool = q.get("tool", "")
+            count = q.get("count", 0)
+            start = q.get("start", "")
+            end = q.get("end", "")
+            time_range = f"{start}~{end}" if start or end else "-"
+            if tool == "by_keyword":
+                qtype = "KEYWORD"
+                qval = q.get("kw", "")
+                eids = "-"
+            else:
+                qtype = q.get("qtype", "")
+                qval = q.get("qval", "")
+                eids = ", ".join(q.get("eids", []))
+            rows.append(
+                f"| {i} | {agent} | {tool} | {qtype} | {qval} | {eids} | {time_range} | {count} |"
+            )
+        query_history = "\n".join(rows)
+    else:
+        query_history = "_No queries executed yet._"
 
     try:
         if mitre_kb:
@@ -385,6 +415,12 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
         + attribution_investigation_prompt
         + """
 
+### QUERY FINGERPRINT HISTORY (READ-ONLY — DO NOT REPEAT)
+
+Every query already executed against Wazuh Indexer is recorded below. Cross-check your intended query against this table before routing to Log_Retrieval_Node.
+
+{query_history}
+
 ### CURRENT CASE CONTEXT
 
 - **MITRE Knowledge Base**:
@@ -409,12 +445,28 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
                 "messages": messages,
                 "mitre_instructions": mitre_instructions,
                 "multi_host_instructions": multi_host_instructions,
+                "query_history": query_history,
                 "kb_str": kb_str,
                 "format_instructions": format_instructions,
             }
         )
 
         raw_text = getattr(llm_msg, "content", str(llm_msg))
+
+        # 如果 raw_text 是 JSON 数组，只取第一个元素
+        stripped = raw_text.strip()
+        if stripped.startswith("["):
+            try:
+                parsed_array = json.loads(stripped)
+                if isinstance(parsed_array, list) and parsed_array:
+                    raw_text = json.dumps(parsed_array[0], ensure_ascii=False)
+                    logger.warning(
+                        "Planner output an array of %d actions. Taking only the first (%s).",
+                        len(parsed_array),
+                        parsed_array[0].get("target", ""),
+                    )
+            except json.JSONDecodeError:
+                pass
 
         try:
             result = parser.parse(raw_text)
@@ -524,14 +576,30 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
 
     logger.info("Dispatching task to Log Retrieval Agent...")
     raw_logs_buffer = []
+    new_queries: list[dict[str, Any]] = []
 
     try:
         result = agent.invoke(
             {"messages": [("human", f"Chief Planner Instruction:\n{instruction}")]}
         )
 
+        pending_tool_calls: dict[str, dict] = {}
+
         for msg in result["messages"]:
-            if isinstance(msg, ToolMessage):
+            if isinstance(msg, AIMessage):
+                tcs = getattr(msg, "tool_calls", None) or []
+                for tc in tcs:
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", "")
+                    tc_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    tc_args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", {})
+                    if tc_id:
+                        pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
+
+            elif isinstance(msg, ToolMessage):
+                tc_id = getattr(msg, "tool_call_id", "")
+                tc_info = pending_tool_calls.pop(tc_id, None)
+
+                # --- log collection (existing logic) ---
                 try:
                     parsed_logs = json.loads(msg.content)
 
@@ -550,6 +618,39 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
                         str(msg.content)[:100],
                     )
 
+                # --- query fingerprint extraction ---
+                if tc_info:
+                    log_count = 0
+                    try:
+                        parsed = json.loads(msg.content)
+                        if isinstance(parsed, list):
+                            log_count = len(parsed)
+                        elif isinstance(parsed, dict) and "search_feedback" not in parsed:
+                            log_count = 1
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                    tool_name = tc_info["name"]
+                    args = tc_info["args"]
+
+                    fp: dict[str, Any] = {
+                        "agent": args.get("agent_id", ""),
+                        "tool": "by_keyword" if "keyword" in tool_name else "by_eventid",
+                        "count": log_count,
+                    }
+
+                    if "keyword" in tool_name:
+                        fp["kw"] = (args.get("keyword") or "")[:120]
+                    else:
+                        fp["qtype"] = args.get("query_type", "")
+                        fp["qval"] = (args.get("query_value") or "")[:120]
+                        fp["eids"] = args.get("event_ids", [])
+
+                    fp["start"] = (args.get("start_time") or "")[:25]
+                    fp["end"] = (args.get("end_time") or "")[:25]
+
+                    new_queries.append(fp)
+
     except Exception as e:
         logger.error("Agent execution failed: %s", e)
 
@@ -558,7 +659,7 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
     else:
         logger.info("Log Retrieval returned 0 logs.")
 
-    return {"current_raw_logs": raw_logs_buffer}
+    return {"current_raw_logs": raw_logs_buffer, "executed_queries": new_queries}
 
 
 def information_synthesizer_node(
