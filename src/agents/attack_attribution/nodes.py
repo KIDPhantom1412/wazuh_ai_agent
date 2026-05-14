@@ -406,7 +406,8 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
 
 - 'Reporter_Node': Routes to the reporting engine to close the case.
   - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until you have exhaustively investigated EVERY SINGLE suspicious PID discovered. Review your history: if there is any PID where you haven't checked BOTH its origins (Upward trace) AND its subsequent actions (Downward/Lateral trace), you MUST go back and query it. Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence.
-  - **How to instruct**: Provide a brief draft/summary of the attack narrative for the reporter to expand upon.
+  - **How to instruct**: Provide a brief narrative summary of the attack chain and key findings. This summary will be passed as context to the Reporter, which has its OWN strict report format template.
+  - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema, field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or markup requirements in your instruction. The Reporter automatically applies its own professional forensic report template. Prescribing a conflicting format will corrupt the final report.
 
 {mitre_instructions}
 {multi_host_instructions}
