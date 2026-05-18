@@ -15,16 +15,21 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from agents.rule_generator.load_skill import get_skill_descriptions, load_skill
-from agents.rule_generator.state import RuleGeneratorState
+from agents.rule_agent.load_skill import get_skill_descriptions, load_skill
+from agents.rule_agent.state import RuleGeneratorState
 from wazuh_api.indexer_api import search_archived_logs
 from wazuh_api.server_api import (
     delete_rule_file,
     get_agents_overview,
     get_config_agentless,
     get_manager_logs,
+    get_rule_file,
     get_rule_info,
+    get_rules_by_requirement,
     get_wazuh_server_api_info,
+    list_rule_files,
+    list_rule_groups,
+    query_rules,
     restart_manager,
     run_logtest,
     upload_rule_file,
@@ -140,6 +145,313 @@ def _rule_exists(rule_id: int) -> bool:
         if isinstance(item, dict) and str(item.get("id")) == str(rule_id):
             return True
     return False
+
+
+def _clean_rule_query_params(params: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    allowed_keys = {
+        "rule_ids",
+        "search",
+        "group",
+        "level",
+        "filename",
+        "relative_dirname",
+        "status",
+        "pci_dss",
+        "gdpr",
+        "gpg13",
+        "hipaa",
+        "tsc",
+        "mitre",
+        "limit",
+        "offset",
+        "select",
+        "sort",
+        "q",
+    }
+    for key, value in params.items():
+        if key not in allowed_keys:
+            continue
+        if value in (None, "", []):
+            continue
+        cleaned[key] = value
+    cleaned["limit"] = _normalize_query_limit(cleaned.get("limit"), default=10)
+    return cleaned
+
+
+def _normalize_query_limit(value: Any, default: int = 10, maximum: int = 100) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return default
+    if limit < 1:
+        return default
+    return min(limit, maximum)
+
+
+def _has_rule_filter(params: dict[str, Any]) -> bool:
+    filter_keys = {
+        "rule_ids",
+        "search",
+        "group",
+        "level",
+        "filename",
+        "relative_dirname",
+        "status",
+        "pci_dss",
+        "gdpr",
+        "gpg13",
+        "hipaa",
+        "tsc",
+        "mitre",
+        "q",
+    }
+    return any(params.get(key) not in (None, "", []) for key in filter_keys)
+
+
+def _compact_rule_item(item: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in (
+        "id",
+        "level",
+        "description",
+        "groups",
+        "filename",
+        "relative_dirname",
+        "status",
+        "pci_dss",
+        "gdpr",
+        "gpg13",
+        "hipaa",
+        "tsc",
+        "mitre",
+    ):
+        if key in item:
+            compact[key] = item.get(key)
+    return compact
+
+
+def _compact_rule_query_response(response: Any, limit: int = 10) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        return {"total_affected_items": 0, "items": [], "raw": response}
+
+    error = response.get("error")
+    data = response.get("data", {})
+    if not isinstance(data, dict):
+        return {
+            "total_affected_items": 0,
+            "items": [],
+            "error": error,
+            "message": response.get("message"),
+        }
+
+    affected_items = data.get("affected_items", [])
+    if not isinstance(affected_items, list):
+        affected_items = []
+
+    compact_items = [
+        _compact_rule_item(item) for item in affected_items[:limit] if isinstance(item, dict)
+    ]
+    return {
+        "total_affected_items": data.get("total_affected_items", len(affected_items)),
+        "total_failed_items": data.get("total_failed_items", 0),
+        "failed_items": data.get("failed_items", []),
+        "items": compact_items,
+        "message": response.get("message"),
+        "error": error,
+    }
+
+
+def _query_rules_for_context(**params: Any) -> dict[str, Any]:
+    cleaned_params = _clean_rule_query_params(params)
+    response = query_rules(**cleaned_params)
+    limit = cleaned_params.get("limit", 10)
+    if not isinstance(limit, int):
+        limit = 10
+    return {
+        "params": cleaned_params,
+        "result": _compact_rule_query_response(response, limit=limit),
+    }
+
+
+def _clean_rule_collection_params(params: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    allowed_keys = {
+        "search",
+        "limit",
+        "offset",
+        "select",
+        "sort",
+        "q",
+    }
+    for key, value in params.items():
+        if key not in allowed_keys:
+            continue
+        if value in (None, "", []):
+            continue
+        cleaned[key] = value
+    cleaned["limit"] = _normalize_query_limit(cleaned.get("limit"), default=10)
+    return cleaned
+
+
+def _compact_collection_query_response(response: Any, limit: int = 10) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        return {"total_affected_items": 0, "items": [], "raw": response}
+
+    error = response.get("error")
+    data = response.get("data", {})
+    if not isinstance(data, dict):
+        return {
+            "total_affected_items": 0,
+            "items": [],
+            "error": error,
+            "message": response.get("message"),
+        }
+
+    affected_items = data.get("affected_items", [])
+    if not isinstance(affected_items, list):
+        affected_items = []
+
+    return {
+        "total_affected_items": data.get("total_affected_items", len(affected_items)),
+        "total_failed_items": data.get("total_failed_items", 0),
+        "failed_items": data.get("failed_items", []),
+        "items": affected_items[:limit],
+        "message": response.get("message"),
+        "error": error,
+    }
+
+
+def _query_rule_files_for_context(**params: Any) -> dict[str, Any]:
+    filename = params.get("filename")
+    if isinstance(filename, list):
+        filename = filename[0] if filename else None
+    if isinstance(filename, str) and filename.strip():
+        cleaned_params = {"filename": filename.strip()}
+        response = get_rule_file(filename.strip())
+        return {
+            "params": cleaned_params,
+            "result": _compact_collection_query_response(response, limit=1),
+            "result_type": "file",
+        }
+
+    cleaned_params = _clean_rule_collection_params(params)
+    response = list_rule_files(**cleaned_params)
+    limit = cleaned_params.get("limit", 10)
+    return {
+        "params": cleaned_params,
+        "result": _compact_collection_query_response(response, limit=limit),
+        "result_type": "files",
+    }
+
+
+def _query_rule_groups_for_context(**params: Any) -> dict[str, Any]:
+    cleaned_params = _clean_rule_collection_params(params)
+    response = list_rule_groups(**cleaned_params)
+    limit = cleaned_params.get("limit", 10)
+    return {
+        "params": cleaned_params,
+        "result": _compact_collection_query_response(response, limit=limit),
+        "result_type": "groups",
+    }
+
+
+def _query_requirement_rules_for_context(requirement: str, **params: Any) -> dict[str, Any]:
+    cleaned_params = _clean_rule_collection_params(params)
+    response = get_rules_by_requirement(requirement=requirement, **cleaned_params)
+    limit = cleaned_params.get("limit", 10)
+    return {
+        "params": {"requirement": requirement, **cleaned_params},
+        "result": _compact_rule_query_response(response, limit=limit),
+        "result_type": "requirement",
+    }
+
+
+def _format_api_error(result: dict[str, Any], params: dict[str, Any]) -> str | None:
+    error = result.get("error") if isinstance(result, dict) else None
+    failed_items = result.get("failed_items", []) if isinstance(result, dict) else []
+    if error in (None, 0) and not failed_items:
+        return None
+    return (
+        "查询 Wazuh 规则失败。\n\n"
+        f"- 查询条件：`{json.dumps(params, ensure_ascii=False)}`\n"
+        f"- API error：{error}\n"
+        f"- message：{result.get('message')}\n"
+        f"- failed_items：`{json.dumps(failed_items, ensure_ascii=False)}`"
+    )
+
+
+def _format_rule_query_response(
+    result: dict[str, Any], params: dict[str, Any], result_type: str = "rules"
+) -> str:
+    error_text = _format_api_error(result, params)
+    if error_text:
+        return error_text
+
+    items = result.get("items", []) if isinstance(result, dict) else []
+    total = result.get("total_affected_items", 0) if isinstance(result, dict) else 0
+    params_text = json.dumps(params, ensure_ascii=False)
+
+    if not items:
+        target = {
+            "files": "Wazuh 规则文件",
+            "file": "Wazuh 规则文件",
+            "groups": "Wazuh 规则组",
+            "requirement": "匹配该 requirement 的 Wazuh 规则",
+        }.get(result_type, "Wazuh 规则")
+        return (
+            f"没有查询到匹配的 {target}。\n\n"
+            f"查询条件：`{params_text}`\n\n"
+            "可以继续提供 rule ID、关键词、group、level、filename、MITRE ID 或合规标签再查。"
+        )
+
+    if result_type in {"files", "file"}:
+        lines = [f"查询到 {total} 条匹配的 Wazuh 规则文件，以下是前 {len(items)} 条："]
+        for item in items:
+            if isinstance(item, dict):
+                filename = item.get("filename") or item.get("file") or item.get("name")
+                relative_dirname = item.get("relative_dirname") or item.get("path") or ""
+                status = item.get("status") or ""
+                lines.append(
+                    "- "
+                    f"File: {filename}; "
+                    f"Directory: {relative_dirname}; "
+                    f"Status: {status}"
+                )
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    if result_type == "groups":
+        lines = [f"查询到 {total} 条匹配的 Wazuh 规则组，以下是前 {len(items)} 条："]
+        for item in items:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("group")
+                count = item.get("count") or item.get("rules")
+                lines.append(f"- Group: {name}; Rules: {count}")
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    lines = [f"查询到 {total} 条匹配的 Wazuh 规则，以下是前 {len(items)} 条："]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        groups = item.get("groups")
+        if isinstance(groups, list):
+            groups_text = ", ".join(str(group) for group in groups)
+        else:
+            groups_text = str(groups or "")
+        filename = item.get("filename") or item.get("relative_dirname") or ""
+        lines.append(
+            "- "
+            f"ID: {item.get('id')}; "
+            f"Level: {item.get('level')}; "
+            f"Description: {item.get('description')}; "
+            f"Groups: {groups_text}; "
+            f"File: {filename}"
+        )
+    return "\n".join(lines)
 
 
 def _extract_manager_log_items(logs_resp: Any) -> list[dict[str, Any]]:
@@ -488,9 +800,53 @@ class LogSelection(BaseModel):
     reason: str = Field(description="Brief reason for the ranking.")
 
 
+class RuleQueryRequest(BaseModel):
+    query_type: Literal["rules", "files", "file", "groups", "requirement"] = Field(
+        default="rules",
+        description=(
+            "Type of rule query. Use rules for normal rule search, files/file for rule files, "
+            "groups for rule groups, and requirement for /rules/requirement/{requirement}."
+        ),
+    )
+    rule_ids: int | str | list[int | str] | None = Field(
+        default=None, description="Rule ID or IDs to query, if the user mentioned them."
+    )
+    search: str | None = Field(
+        default=None,
+        description="Free-text search keyword for rules, usually from descriptions or user keywords.",
+    )
+    group: str | None = Field(default=None, description="Rule group filter.")
+    level: str | int | None = Field(default=None, description="Rule level or level range.")
+    filename: str | list[str] | None = Field(default=None, description="Rule filename filter.")
+    relative_dirname: str | None = Field(
+        default=None, description="Rule relative directory filter."
+    )
+    status: str | None = Field(default=None, description="Rule status filter.")
+    pci_dss: str | None = Field(default=None, description="PCI DSS requirement filter.")
+    gdpr: str | None = Field(default=None, description="GDPR requirement filter.")
+    gpg13: str | None = Field(default=None, description="GPG13 requirement filter.")
+    hipaa: str | None = Field(default=None, description="HIPAA requirement filter.")
+    tsc: str | None = Field(default=None, description="TSC requirement filter.")
+    mitre: str | None = Field(default=None, description="MITRE ATT&CK technique ID filter.")
+    requirement: str | None = Field(
+        default=None,
+        description="Requirement path value for GET /rules/requirement/{requirement}, such as pci_dss, gdpr, gpg13, hipaa, tsc, mitre, group, or level.",
+    )
+    limit: int = Field(default=10, description="Maximum rules to return, default 10.")
+    offset: int | None = Field(default=None, description="Pagination offset.")
+    select: str | None = Field(default=None, description="Comma-separated fields to return.")
+    sort: str | None = Field(default=None, description="Sort expression.")
+    q: str | None = Field(default=None, description="Advanced Wazuh API query expression.")
+    list_all: bool = Field(
+        default=False,
+        description="Set true only when the user explicitly asks to list rules without a filter.",
+    )
+
+
 class RouterDecision(BaseModel):
     next_step: Literal[
         "extract_requirements",
+        "query_rule",
         "verify_rule",
         "cancel_verification",
         "keep_rule",
@@ -579,6 +935,7 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         User Input: {user_input}
 
         Options:
+        - 'query_rule': User wants to query, inspect, search, or list existing Wazuh rules, rule groups, rule files, or compliance-tagged rules.
         - 'verify_rule': User wants to verify/test the generated rule.
         - 'cancel_verification': User wants to cancel the process before verification.
         - 'keep_rule': User wants to keep the applied rule (after verification success).
@@ -610,11 +967,25 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
             "user_input_history": user_input_history,
         }
 
+        if result.next_step != "query_rule":
+            updates.update(
+                {
+                    "rule_query_params": None,
+                    "rule_query_result": None,
+                    "rule_query_result_type": None,
+                    "rule_query_error": None,
+                }
+            )
+
         if result.next_step == "extract_requirements" and not generated_rule and not logtest_passed:
             # Reset stale state before starting a fresh generation flow.
             updates.update(
                 {
                     "missing_parameters": None,
+                    "rule_query_params": None,
+                    "rule_query_result": None,
+                    "rule_query_result_type": None,
+                    "rule_query_error": None,
                     "logs_preview": [],
                     "raw_logs": [],
                     "log_analysis": None,
@@ -635,6 +1006,119 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         return updates
     except Exception:
         return {"decision": "unknown", "user_input_history": user_input_history}
+
+
+def rule_query_node(state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel):
+    """Query existing Wazuh rules from the Wazuh server API."""
+    logger.info("Executing Rule Query Node")
+    messages = state.get("messages", [])
+    user_input = messages[-1].content if messages else ""
+    user_input_history = (state.get("user_input_history") or [])[-8:]
+    user_input_history_text = "\n".join(
+        [f"{idx + 1}. {item}" for idx, item in enumerate(user_input_history)]
+    )
+
+    parser = PydanticOutputParser(pydantic_object=RuleQueryRequest)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """Extract Wazuh rule query filters from the user's request.
+
+Use only filters explicitly stated or strongly implied by the user.
+Choose query_type carefully:
+- `rules`: query concrete rules by id, keyword, group, level, filename, MITRE, status, or compliance filters.
+- `files`: list rule files when the user asks for rule files, filenames, or available rule XML files.
+- `file`: fetch one specific rule file when the user gives a filename and asks for that file.
+- `groups`: list rule groups when the user asks for available rule groups/categories.
+- `requirement`: use GET /rules/requirement/{{requirement}} when the user asks which rules define a requirement field/type.
+If the user asks about a concrete numeric rule ID, fill `rule_ids`.
+If the user asks for rules about a concept, product, event type, or keyword, fill `search`.
+If the user asks for a rule group, fill `group`.
+If the user asks for compliance labels or MITRE technique IDs, fill the matching field.
+Set limit to 10 unless the user requests a smaller number.
+Set list_all=true only when the user explicitly asks to list rules without any filter.
+Do not invent rule IDs, filenames, groups, or compliance labels.
+
+Recent user inputs:
+{user_input_history}
+
+{format_instructions}""",
+            ),
+            ("human", "{user_input}"),
+        ]
+    )
+
+    try:
+        extraction = (prompt | model | parser).invoke(
+            {
+                "user_input": user_input,
+                "user_input_history": user_input_history_text,
+                "format_instructions": parser.get_format_instructions(),
+            }
+        )
+        extraction_data = (
+            extraction.model_dump() if hasattr(extraction, "model_dump") else extraction.dict()
+        )
+        query_type = extraction_data.get("query_type") or "rules"
+        list_all = bool(extraction_data.get("list_all"))
+    except Exception as exc:
+        logger.warning(f"Failed to parse rule query request: {exc}")
+        query_type = "rules"
+        list_all = False
+        extraction_data = {}
+        params = {"limit": 10}
+        id_match = re.search(r"\b\d{2,}\b", str(user_input))
+        if id_match:
+            params["rule_ids"] = int(id_match.group(0))
+        elif user_input:
+            params["search"] = str(user_input)
+
+    try:
+        if query_type == "files":
+            query_result = _query_rule_files_for_context(**extraction_data)
+        elif query_type == "file":
+            query_result = _query_rule_files_for_context(**extraction_data)
+        elif query_type == "groups":
+            query_result = _query_rule_groups_for_context(**extraction_data)
+        elif query_type == "requirement":
+            requirement = extraction_data.get("requirement")
+            if not isinstance(requirement, str) or not requirement.strip():
+                return {
+                    "rule_query_params": {"query_type": query_type},
+                    "rule_query_result": None,
+                    "rule_query_error": "缺少 requirement 参数，请说明要查询的 requirement，例如 pci_dss、gdpr、gpg13、hipaa、tsc、mitre、group 或 level。",
+                }
+            requirement_params = dict(extraction_data)
+            requirement_params.pop("requirement", None)
+            query_result = _query_requirement_rules_for_context(
+                requirement=requirement.strip(), **requirement_params
+            )
+        else:
+            params = _clean_rule_query_params(extraction_data or params)
+            if not _has_rule_filter(params) and not list_all:
+                return {
+                    "rule_query_params": params,
+                    "rule_query_result": None,
+                    "rule_query_error": "缺少明确的规则查询条件，请提供 rule ID、关键词、group、level、filename、MITRE ID、合规标签，或明确要求列出规则。",
+                }
+            query_result = _query_rules_for_context(**params)
+
+        result_type = query_result.get("result_type", query_type)
+        return {
+            "rule_query_params": query_result["params"],
+            "rule_query_result": query_result["result"],
+            "rule_query_result_type": result_type,
+            "rule_query_error": None,
+        }
+    except Exception as exc:
+        logger.error(f"Error querying rules: {exc}")
+        return {
+            "rule_query_params": extraction_data if isinstance(extraction_data, dict) else {},
+            "rule_query_result": None,
+            "rule_query_result_type": query_type,
+            "rule_query_error": str(exc),
+        }
 
 
 def requirement_understanding_node(
@@ -1040,40 +1524,52 @@ def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig, mode
         return load_skill.invoke(skill_name)
 
     @tool
-    def query_rule_by_id(rule_id: int) -> str:
-        """Query an existing Wazuh rule by ID before choosing a new rule id or referencing if_sid/if_matched_sid."""
+    def query_existing_rules(
+        rule_ids: int | str | list[int | str] | None = None,
+        search: str | None = None,
+        group: str | None = None,
+        level: str | int | None = None,
+        filename: str | list[str] | None = None,
+        mitre: str | None = None,
+        limit: int = 5,
+    ) -> str:
+        """Query existing Wazuh rules by ID, keyword, group, level, filename, or MITRE ID."""
         try:
-            rule_info = get_rule_info(rule_id)
+            result = _query_rules_for_context(
+                rule_ids=rule_ids,
+                search=search,
+                group=group,
+                level=level,
+                filename=filename,
+                mitre=mitre,
+                limit=limit,
+            )
+        except Exception as exc:
+            return f"lookup_failed: error={exc}"
+
+        return json.dumps(result, ensure_ascii=False)
+
+    @tool
+    def query_rule_by_id(rule_id: int) -> str:
+        """Query one existing Wazuh rule by ID before choosing or referencing a rule ID."""
+        try:
+            result = _query_rules_for_context(rule_ids=rule_id, limit=1)
         except Exception as exc:
             return f"lookup_failed: rule_id={rule_id}; error={exc}"
 
-        affected_items = []
-        if isinstance(rule_info, dict):
-            affected_items = rule_info.get("data", {}).get("affected_items", [])
-        if not isinstance(affected_items, list) or not affected_items:
+        items = result.get("result", {}).get("items", [])
+        if not items:
             return f"rule_id={rule_id}; exists=false"
-
-        first_item = next((item for item in affected_items if isinstance(item, dict)), None)
-        if not first_item:
-            return f"rule_id={rule_id}; exists=false"
-
         return json.dumps(
-            {
-                "rule_id": rule_id,
-                "exists": True,
-                "description": first_item.get("description"),
-                "level": first_item.get("level"),
-                "groups": first_item.get("groups"),
-                "filename": first_item.get("filename"),
-            },
-            ensure_ascii=False,
+            {"rule_id": rule_id, "exists": True, "rule": items[0]}, ensure_ascii=False
         )
 
     try:
         system_prompt = f"""You are a Wazuh Rule Generator Agent.
 Generate a valid Wazuh XML rule from requirements and log analysis.
 You should use the load_rule_skill tool to fetch needed syntax knowledge.
-You should use the query_rule_by_id tool to verify rule IDs before using them.
+You should use query_existing_rules to inspect similar existing rules when it helps rule design.
+You should use query_rule_by_id or query_existing_rules to verify rule IDs before using them.
 Available skill names: {skill_names_text}
 If previous validation error exists, fix it in the new output.
 You must use the provided raw_logs as primary evidence.
@@ -1082,13 +1578,14 @@ Do not invent nonexistent field paths or values.
 Do not use the <decoded_as> element anywhere in the generated rule.
 Before choosing a new rule id, query candidate IDs and only use one that does not already exist.
 If you choose to use any rule reference such as <if_sid> or <if_matched_sid>, query that rule id first and only use confirmed existing IDs.
+If requirements mention a known product, event type, group, or MITRE technique, query existing rules for useful context before generating.
 Output must be XML only.
 Return exactly one valid Wazuh rule XML block rooted at <group>.
 Do not wrap the XML in JSON.
 Do not add explanations, comments, or markdown fences."""
         generation_agent = create_agent(
             model=model,
-            tools=[load_rule_skill, query_rule_by_id],
+            tools=[load_rule_skill, query_existing_rules, query_rule_by_id],
             system_prompt=system_prompt,
         )
         generation_result = generation_agent.invoke(
@@ -1465,6 +1962,10 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     verification_feedback = state.get("verification_feedback")
     rule_id = state.get("rule_id")
     logs = state.get("logs_preview", [])
+    rule_query_result = state.get("rule_query_result")
+    rule_query_params = state.get("rule_query_params") or {}
+    rule_query_result_type = state.get("rule_query_result_type") or "rules"
+    rule_query_error = state.get("rule_query_error")
 
     preview_logs = [item for item in logs[:3] if isinstance(item, dict)]
     display_logs = list(preview_logs)
@@ -1476,7 +1977,24 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
 
     prompt_text = ""
 
-    if missing:
+    if rule_query_error:
+        content = (
+            "查询 Wazuh 规则失败。\n\n"
+            f"- 查询条件：`{json.dumps(rule_query_params, ensure_ascii=False)}`\n"
+            f"- 错误信息：{rule_query_error}"
+        )
+        return {"messages": [AIMessage(content=content)]}
+    elif rule_query_result:
+        return {
+            "messages": [
+                AIMessage(
+                    content=_format_rule_query_response(
+                        rule_query_result, rule_query_params, rule_query_result_type
+                    )
+                )
+            ]
+        }
+    elif missing:
         prompt_text = f"The user requirement is missing the following parameters: {missing}. Ask the user to provide them."
     elif is_feasible is False:
         prompt_text = f"The rule generation is not feasible. Reason: {infeasibility_reason}. Explain this to the user."

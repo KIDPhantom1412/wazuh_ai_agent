@@ -7,9 +7,14 @@ from typing_extensions import TypedDict
 
 class RuleGeneratorState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    decision: str | None
     user_input_history: list[str] | None
     environment_info: str | None
     server_timestamp: str | None
+    rule_query_params: dict | None
+    rule_query_result: dict | None
+    rule_query_result_type: str | None
+    rule_query_error: str | None
     rule_requirements: dict | None
     missing_parameters: list[str] | None
     logs_preview: list[dict] | None

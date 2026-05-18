@@ -98,6 +98,210 @@ def get_rule_info(rule_id: int):
     return response.json()
 
 
+def _join_api_values(value):
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        values = [str(item) for item in value if item is not None and str(item) != ""]
+        return ",".join(values) if values else None
+    return value
+
+
+def _clean_api_params(raw_params: dict):
+    return {key: value for key, value in raw_params.items() if value not in (None, "", [])}
+
+
+def query_rules(
+    rule_ids: int | str | list[int | str] | None = None,
+    search: str | None = None,
+    group: str | None = None,
+    level: str | int | None = None,
+    filename: str | list[str] | None = None,
+    relative_dirname: str | None = None,
+    status: str | None = None,
+    pci_dss: str | None = None,
+    gdpr: str | None = None,
+    gpg13: str | None = None,
+    hipaa: str | None = None,
+    tsc: str | None = None,
+    mitre: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    select: str | None = None,
+    sort: str | None = None,
+    q: str | None = None,
+    pretty: bool | None = None,
+    wait_for_complete: bool | None = None,
+    distinct: bool | None = None,
+):
+    """Query Wazuh rules with the filters supported by GET /rules."""
+    logger.info("Querying rules")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+
+    raw_params = {
+        "rule_ids": _join_api_values(rule_ids),
+        "search": search,
+        "group": group,
+        "level": level,
+        "filename": _join_api_values(filename),
+        "relative_dirname": relative_dirname,
+        "status": status,
+        "pci_dss": pci_dss,
+        "gdpr": gdpr,
+        "gpg13": gpg13,
+        "hipaa": hipaa,
+        "tsc": tsc,
+        "mitre": mitre,
+        "limit": limit,
+        "offset": offset,
+        "select": select,
+        "sort": sort,
+        "q": q,
+        "pretty": pretty,
+        "wait_for_complete": wait_for_complete,
+        "distinct": distinct,
+    }
+    params = _clean_api_params(raw_params)
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/rules",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    logger.info("Query rules completed")
+    return response.json()
+
+
+def list_rule_files(
+    limit: int | None = None,
+    offset: int | None = None,
+    search: str | None = None,
+    select: str | None = None,
+    sort: str | None = None,
+    q: str | None = None,
+    pretty: bool | None = None,
+    wait_for_complete: bool | None = None,
+    distinct: bool | None = None,
+):
+    """List Wazuh rule files with filters supported by GET /rules/files."""
+    logger.info("Listing rule files")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    params = _clean_api_params(
+        {
+            "limit": limit,
+            "offset": offset,
+            "search": search,
+            "select": select,
+            "sort": sort,
+            "q": q,
+            "pretty": pretty,
+            "wait_for_complete": wait_for_complete,
+            "distinct": distinct,
+        }
+    )
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/rules/files",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    logger.info("List rule files completed")
+    return response.json()
+
+
+def get_rule_file(filename: str, raw: bool | None = None, pretty: bool | None = None):
+    """Get a Wazuh rule file by filename."""
+    logger.info(f"Getting rule file: {filename}")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    params = _clean_api_params({"raw": raw, "pretty": pretty})
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/rules/files/{filename}",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    logger.info(f"Get rule file {filename} completed")
+    return response.json()
+
+
+def list_rule_groups(
+    limit: int | None = None,
+    offset: int | None = None,
+    search: str | None = None,
+    select: str | None = None,
+    sort: str | None = None,
+    q: str | None = None,
+    pretty: bool | None = None,
+    wait_for_complete: bool | None = None,
+    distinct: bool | None = None,
+):
+    """List Wazuh rule groups with filters supported by GET /rules/groups."""
+    logger.info("Listing rule groups")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    params = _clean_api_params(
+        {
+            "limit": limit,
+            "offset": offset,
+            "search": search,
+            "select": select,
+            "sort": sort,
+            "q": q,
+            "pretty": pretty,
+            "wait_for_complete": wait_for_complete,
+            "distinct": distinct,
+        }
+    )
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/rules/groups",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    logger.info("List rule groups completed")
+    return response.json()
+
+
+def get_rules_by_requirement(
+    requirement: str,
+    limit: int | None = None,
+    offset: int | None = None,
+    select: str | None = None,
+    sort: str | None = None,
+    q: str | None = None,
+    pretty: bool | None = None,
+    wait_for_complete: bool | None = None,
+    distinct: bool | None = None,
+):
+    """Query Wazuh rules by requirement via GET /rules/requirement/{requirement}."""
+    logger.info(f"Querying rules by requirement: {requirement}")
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    params = _clean_api_params(
+        {
+            "limit": limit,
+            "offset": offset,
+            "select": select,
+            "sort": sort,
+            "q": q,
+            "pretty": pretty,
+            "wait_for_complete": wait_for_complete,
+            "distinct": distinct,
+        }
+    )
+
+    response = requests.get(
+        f"{protocol}://{host}:{port}/rules/requirement/{requirement}",
+        headers=requests_headers,
+        params=params,
+        verify=False,
+    )
+    logger.info(f"Query rules by requirement {requirement} completed")
+    return response.json()
+
+
 def get_config_agentless():
     """Get agentless configuration."""
     logger.info("Getting agentless configuration")

@@ -9,10 +9,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-# Mock wazuh_api before importing agent modules
-sys.modules["wazuh_api"] = MagicMock()
-sys.modules["wazuh_api.server_api"] = MagicMock()
-sys.modules["wazuh_api.indexer_api"] = MagicMock()
+_MISSING = object()
 
 
 class MockRouterReActModel(BaseChatModel):
@@ -58,7 +55,7 @@ class MockRouterReActModel(BaseChatModel):
                                 tool_calls=[
                                     {
                                         "id": "call_2",
-                                        "name": "delegate_rule_generator",
+                                        "name": "delegate_rule_agent",
                                         "args": {
                                             "task": "已获用户明确授权：删除 id 为 100100 的规则",
                                             "reset_context": True,
@@ -78,7 +75,7 @@ class MockRouterReActModel(BaseChatModel):
                                 tool_calls=[
                                     {
                                         "id": "call_3",
-                                        "name": "delegate_rule_generator",
+                                        "name": "delegate_rule_agent",
                                         "args": {
                                             "task": "已获用户明确授权：验证刚才处理的规则",
                                             "reset_context": False,
@@ -98,7 +95,7 @@ class MockRouterReActModel(BaseChatModel):
                                 tool_calls=[
                                     {
                                         "id": "call_4",
-                                        "name": "delegate_rule_generator",
+                                        "name": "delegate_rule_agent",
                                         "args": {
                                             "task": "基于前面执行结果生成处理说明",
                                             "reset_context": False,
@@ -146,6 +143,31 @@ class MockRouterReActModel(BaseChatModel):
                 ]
             )
 
+        if "列出规则组" in latest_user_input:
+            if len(tool_messages) == 0:
+                return ChatResult(
+                    generations=[
+                        ChatGeneration(
+                            message=AIMessage(
+                                content="",
+                                tool_calls=[
+                                    {
+                                        "id": "call_rule_query",
+                                        "name": "delegate_rule_agent",
+                                        "args": {
+                                            "task": "列出 Wazuh 规则组",
+                                            "reset_context": True,
+                                        },
+                                    }
+                                ],
+                            )
+                        )
+                    ]
+                )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content="已列出 Wazuh 规则组。"))]
+            )
+
         if "继续验证刚才处理的规则" in latest_user_input:
             if len(tool_messages) == 0:
                 return ChatResult(
@@ -156,7 +178,7 @@ class MockRouterReActModel(BaseChatModel):
                                 tool_calls=[
                                     {
                                         "id": "call_verify",
-                                        "name": "delegate_rule_generator",
+                                        "name": "delegate_rule_agent",
                                         "args": {
                                             "task": "已获用户明确授权：验证刚才处理的规则",
                                             "reset_context": False,
@@ -181,7 +203,7 @@ class MockRouterReActModel(BaseChatModel):
                                 tool_calls=[
                                     {
                                         "id": "call_risky",
-                                        "name": "delegate_rule_generator",
+                                        "name": "delegate_rule_agent",
                                         "args": {
                                             "task": "验证刚才生成的规则并重启 Wazuh manager",
                                             "reset_context": False,
@@ -302,6 +324,21 @@ class FakeRuleAgent:
                 "verification_feedback": messages[-1].content,
             }
 
+        if "列出" in current_task and "规则组" in current_task:
+            messages.append(
+                AIMessage(content="查询到 1 条匹配的 Wazuh 规则组：\n- Group: sshd; Rules: 12")
+            )
+            return {
+                **state,
+                "messages": messages,
+                "rule_query_result_type": "groups",
+                "rule_query_result": {
+                    "total_affected_items": 1,
+                    "items": [{"name": "sshd", "count": 12}],
+                },
+                "rule_query_params": {"limit": 10},
+            }
+
         messages.append(AIMessage(content="规则已生成，请确认是否验证。"))
         return {
             **state,
@@ -346,14 +383,35 @@ class FakeAttackAgent:
         }
 
 
+def _load_router_agent_for_test():
+    mocked_wazuh_modules = {
+        "wazuh_api": MagicMock(),
+        "wazuh_api.server_api": MagicMock(),
+        "wazuh_api.indexer_api": MagicMock(),
+    }
+    original_modules = {name: sys.modules.get(name, _MISSING) for name in mocked_wazuh_modules}
+    sys.modules.update(mocked_wazuh_modules)
+    try:
+        from agents import router_agent as router_agent_module
+    finally:
+        for name, original_module in original_modules.items():
+            if original_module is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original_module
+    return router_agent_module
+
+
 def test_router_agent_plans_and_executes_three_step_rule_chain_in_one_turn():
-    from agents.router_agent import get_router_agent
+    router_agent_module = _load_router_agent_for_test()
 
     with (
-        patch("agents.router_agent.get_rule_generator_agent", return_value=FakeRuleAgent()),
-        patch("agents.router_agent.get_attack_attribution_agent", return_value=FakeAttackAgent()),
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
     ):
-        app = get_router_agent(MockRouterReActModel())
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
 
         state = {
             "messages": [
@@ -384,13 +442,15 @@ def test_router_agent_plans_and_executes_three_step_rule_chain_in_one_turn():
 
 
 def test_router_agent_preserves_attack_specialist_state_across_turns():
-    from agents.router_agent import get_router_agent
+    router_agent_module = _load_router_agent_for_test()
 
     with (
-        patch("agents.router_agent.get_rule_generator_agent", return_value=FakeRuleAgent()),
-        patch("agents.router_agent.get_attack_attribution_agent", return_value=FakeAttackAgent()),
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
     ):
-        app = get_router_agent(MockRouterReActModel())
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
 
         state = {"messages": [HumanMessage(content="请帮我对这条异常进程告警做攻击溯源分析")]}
         result = app.invoke(state)
@@ -406,13 +466,15 @@ def test_router_agent_preserves_attack_specialist_state_across_turns():
 
 
 def test_router_agent_isolates_specialist_state_by_thread_id():
-    from agents.router_agent import get_router_agent
+    router_agent_module = _load_router_agent_for_test()
 
     with (
-        patch("agents.router_agent.get_rule_generator_agent", return_value=FakeRuleAgent()),
-        patch("agents.router_agent.get_attack_attribution_agent", return_value=FakeAttackAgent()),
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
     ):
-        app = get_router_agent(MockRouterReActModel())
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
 
         app.invoke(
             {
@@ -444,13 +506,15 @@ def test_router_agent_isolates_specialist_state_by_thread_id():
 
 
 def test_router_agent_requires_user_confirmation_before_high_risk_rule_actions():
-    from agents.router_agent import get_router_agent
+    router_agent_module = _load_router_agent_for_test()
 
     with (
-        patch("agents.router_agent.get_rule_generator_agent", return_value=FakeRuleAgent()),
-        patch("agents.router_agent.get_attack_attribution_agent", return_value=FakeAttackAgent()),
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
     ):
-        app = get_router_agent(MockRouterReActModel())
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
         result = app.invoke({"messages": [HumanMessage(content="帮我直接验证并重启manager")]})
 
         tool_messages = [msg for msg in result["messages"] if getattr(msg, "type", "") == "tool"]
@@ -458,14 +522,35 @@ def test_router_agent_requires_user_confirmation_before_high_risk_rule_actions()
         assert "先取得你的明确授权" in result["messages"][-1].content
 
 
-def test_router_agent_answers_directly_when_no_specialist_is_needed():
-    from agents.router_agent import get_router_agent
+def test_router_agent_routes_readonly_rule_queries_without_confirmation():
+    router_agent_module = _load_router_agent_for_test()
 
     with (
-        patch("agents.router_agent.get_rule_generator_agent", return_value=FakeRuleAgent()),
-        patch("agents.router_agent.get_attack_attribution_agent", return_value=FakeAttackAgent()),
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
     ):
-        app = get_router_agent(MockRouterReActModel())
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
+        result = app.invoke({"messages": [HumanMessage(content="帮我列出规则组")]})
+
+        tool_messages = [msg for msg in result["messages"] if getattr(msg, "type", "") == "tool"]
+        assert len(tool_messages) == 1
+        assert '"approval_required": true' not in tool_messages[-1].content.lower()
+        assert "Group: sshd" in tool_messages[-1].content
+        assert "已列出 Wazuh 规则组" in result["messages"][-1].content
+
+
+def test_router_agent_answers_directly_when_no_specialist_is_needed():
+    router_agent_module = _load_router_agent_for_test()
+
+    with (
+        patch.object(router_agent_module, "get_rule_agent", return_value=FakeRuleAgent()),
+        patch.object(
+            router_agent_module, "get_attack_attribution_agent", return_value=FakeAttackAgent()
+        ),
+    ):
+        app = router_agent_module.get_router_agent(MockRouterReActModel())
         result = app.invoke({"messages": [HumanMessage(content="帮我查一下今天上海天气")]})
 
         assert "直接由路由大模型回答" in result["messages"][-1].content
