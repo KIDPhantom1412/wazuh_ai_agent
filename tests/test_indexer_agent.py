@@ -1,9 +1,14 @@
+import sys
+from unittest.mock import MagicMock
+
 import pytest
 from agentevals.trajectory.match import create_trajectory_match_evaluator
 from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from core.config import settings
+
+_MISSING = object()
 
 
 @pytest.fixture
@@ -15,6 +20,47 @@ def demo_model():
     )
 
 
+def _load_indexer_agent_for_test():
+    fake_indexer_api = MagicMock()
+    fake_indexer_api.count_agent_alerts.return_value = {"count": 133}
+    fake_indexer_api.agent_alerts.return_value = {
+        "hits": {
+            "hits": [
+                {
+                    "_source": {
+                        "agent": {
+                            "id": "004",
+                            "name": "UbuntuSSH",
+                            "ip": "192.168.109.135",
+                        },
+                        "data": {"srcuser": "admin0", "srcip": "192.168.109.130"},
+                        "rule": {
+                            "id": "5764",
+                            "description": "Multiple SSH login attempts using non-existent usernames.",
+                        },
+                    }
+                }
+            ]
+        }
+    }
+    fake_indexer_api.agent_archives.return_value = {"hits": {"hits": []}}
+    mocked_modules = {
+        "wazuh_api": MagicMock(),
+        "wazuh_api.indexer_api": fake_indexer_api,
+    }
+    original_modules = {name: sys.modules.get(name, _MISSING) for name in mocked_modules}
+    sys.modules.update(mocked_modules)
+    try:
+        from agents import indexer_agent as indexer_agent_module
+    finally:
+        for name, original_module in original_modules.items():
+            if original_module is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original_module
+    return indexer_agent_module
+
+
 def test_indexer_agent(demo_model):
 
     # test1
@@ -22,9 +68,9 @@ def test_indexer_agent(demo_model):
         trajectory_match_mode="strict",
     )
 
-    from agents.indexer_agent import get_indexer_agent
+    indexer_agent_module = _load_indexer_agent_for_test()
 
-    agent = get_indexer_agent(demo_model)
+    agent = indexer_agent_module.get_indexer_agent(demo_model)
 
     result = agent.invoke(
         {"messages": [HumanMessage(content="过去1小时内agent id为001的agent产生多少警告?")]}
@@ -88,8 +134,8 @@ def test_indexer_agent(demo_model):
                     "name": "get_agent_alerts",
                     "args": {
                         "agent_id": "004",
-                        "x_limit": 3,
-                        "ruleId": 5764,
+                        "x_limit": "3",
+                        "ruleId": "5764",
                     },
                 }
             ],
@@ -105,7 +151,7 @@ def test_indexer_agent(demo_model):
             tool_call_id="call_1",
         ),
         AIMessage(
-            content="根据查询结果，我找到了 agent id 为 004 的 agent 最近 3 条规则 ID 为 5764 的告警。以下是详细信息："
+            content='Here are the alert logs for Agent 004 with Rule ID 5764:\n```json\n[{"agent": {"id": "004", "name": "UbuntuSSH", "ip": "192.168.109.135"}, "data": {"srcuser": "admin0", "srcip": "192.168.109.130"}, "rule": {"id": "5764", "description": "Multiple SSH login attempts using non-existent usernames."}}]\n```'
         ),
     ]
     evaluation = evaluator(outputs=result["messages"], reference_outputs=reference_trajectory)

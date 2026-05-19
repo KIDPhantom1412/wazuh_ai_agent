@@ -9,4 +9,7 @@
 *.pyc
 .idea
 package-lock.json
+<<<<<<< HEAD
 .claude/
+=======
+>>>>>>> upstream/master

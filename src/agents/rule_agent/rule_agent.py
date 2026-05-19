@@ -3,7 +3,7 @@ from functools import partial
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
 
-from agents.rule_generator.nodes import (
+from agents.rule_agent.nodes import (
     cleanup_rule_node,
     decision_node,
     environment_perception_node,
@@ -11,12 +11,13 @@ from agents.rule_generator.nodes import (
     requirement_understanding_node,
     response_node,
     rule_generation_node,
+    rule_query_node,
     rule_verification_node,
 )
-from agents.rule_generator.state import RuleGeneratorState
+from agents.rule_agent.state import RuleGeneratorState
 
 
-def get_rule_generator_agent(model: BaseChatModel):
+def get_rule_agent(model: BaseChatModel):
     """
     Creates the Rule Generator Agent Graph.
     Args:
@@ -35,6 +36,7 @@ def get_rule_generator_agent(model: BaseChatModel):
     workflow.add_node(
         "log_retrieval_feasibility", partial(log_retrieval_feasibility_node, model=model)
     )
+    workflow.add_node("rule_query", partial(rule_query_node, model=model))
     workflow.add_node("rule_generation", partial(rule_generation_node, model=model))
     workflow.add_node("rule_verification", partial(rule_verification_node, model=model))
     workflow.add_node("cleanup_rule", partial(cleanup_rule_node, model=model))
@@ -58,6 +60,8 @@ def get_rule_generator_agent(model: BaseChatModel):
             return "response"  # Just acknowledge
         elif decision == "delete_rule":
             return "cleanup_rule"
+        elif decision == "query_rule":
+            return "rule_query"
         else:
             # If extracting requirements, first go to S1 (Environment Perception)
             return "environment_perception"
@@ -70,11 +74,13 @@ def get_rule_generator_agent(model: BaseChatModel):
             "response": "response",
             "environment_perception": "environment_perception",
             "cleanup_rule": "cleanup_rule",
+            "rule_query": "rule_query",
         },
     )
 
     # Cleanup Rule -> Response
     workflow.add_edge("cleanup_rule", "response")
+    workflow.add_edge("rule_query", "response")
 
     # Requirement Understanding (S2)
     def check_missing_params(state):
