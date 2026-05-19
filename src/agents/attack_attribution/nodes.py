@@ -35,9 +35,6 @@ MITRE_KB_FILE_PATH = (
 
 
 class InitialClueAnalysis(BaseModel):
-    is_ready: bool = Field(
-        description="如果输入是直接可用的完整线索（无需用户确认），为 true。如果输入是原始日志，或用户正在要求修改线索（尚未明确同意），必须为 false。"
-    )
     agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。若未找到则留空。")
     start_time_utc8: str = Field(description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。")
     end_time_utc8: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
@@ -122,20 +119,16 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
             system_prompt = """
             You are a Cybersecurity Triage Expert.
-            Analyze the user's input: is it a raw JSON/System log, or a clear natural language attack clue?
+            Analyze the user's input and extract all relevant security entities.
 
-            [CRITERIA]
-            A "clear natural language attack clue" typically describes an alert, the compromised agent, the malicious behavior, and a strict time boundary.
-            Example of a valid clue: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:10 到 14:20 之间。"
+            A valid clue should describe the alert, the compromised agent, the malicious behavior, and a strict time boundary.
+            Example: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:00 到 14:20 之间。"
 
             [INSTRUCTIONS]
-            1. Determine the input type and set the `is_ready` boolean:
-               - ONLY set `is_ready` to true if the input is ALREADY a fully mature, clear natural language clue that requires no further user confirmation.
-               - If the input is a raw log, JSON, or requires any rewriting, you MUST set `is_ready` to false.
-            2. Generate the `refined_clue` string:
-               - If the input was a raw log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese.
-               - If the input was ALREADY a natural language clue: Polish it slightly for professional tone, ensuring it retains all original facts.
-            3. TIME WINDOW (CRITICAL):
+            1. Generate the `refined_clue` string:
+               - If the input is a raw JSON log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite them into a professional attack clue in Chinese.
+               - If the input is already a natural language clue: Polish it lightly for professional tone, preserving all original facts. Do not fabricate or add information.
+            2. TIME WINDOW (CRITICAL):
                - If the system has pre-extracted a Beijing time window (see below), you MUST use it DIRECTLY for start_time_utc8 and end_time_utc8. Do NOT recalculate or reinterpret the timezone.
                - If NO pre-extracted time window is provided, extract the time from the user's natural language input. Create a 20-minute investigation window (+/- 10 mins) around the stated time.
                - Output into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format with +08:00 suffix (e.g., '2026-04-27T17:15:00+08:00').
@@ -187,31 +180,20 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                 derived_start = analysis.start_time_utc8
                 derived_end = analysis.end_time_utc8
 
-            if analysis.is_ready:
-                return {
-                    **multi_host_updates,
-                    "investigation_clue": analysis.refined_clue,
-                    "default_agent_id": analysis.agent_id,
-                    "default_start_time": derived_start,
-                    "default_end_time": derived_end,
-                    "is_clue_confirmed": True,
-                    "next_action_fromDecisionNode": {"target": "Decision_Node"},
-                    "next_action_fromAttributionPlannerNode": None,
-                }
-            else:
-                return {
-                    **multi_host_updates,
-                    "investigation_clue": analysis.refined_clue,
-                    "default_agent_id": analysis.agent_id,
-                    "default_start_time": derived_start,
-                    "default_end_time": derived_end,
-                    "pending_question_type": "CLUE",
-                    "next_action_fromDecisionNode": {
-                        "target": "User_Input_Node",
-                        "instruction": "ASK_CLUE",
-                    },
-                    "next_action_fromAttributionPlannerNode": None,
-                }
+            # 统一要求用户确认，不依赖 LLM 自主判断是否跳过确认
+            return {
+                **multi_host_updates,
+                "investigation_clue": analysis.refined_clue,
+                "default_agent_id": analysis.agent_id,
+                "default_start_time": derived_start,
+                "default_end_time": derived_end,
+                "pending_question_type": "CLUE",
+                "next_action_fromDecisionNode": {
+                    "target": "User_Input_Node",
+                    "instruction": "ASK_CLUE",
+                },
+                "next_action_fromAttributionPlannerNode": None,
+            }
         else:
             if is_human and pending_type == "CLUE":
                 logger.info("Parsing user feedback on clue...")
@@ -253,7 +235,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                         [
                             (
                                 "system",
-                                "Extract the Agent ID, start_time_utc8, and end_time_utc8 from the following revised clue. You MUST set is_ready to False. Place the revised clue verbatim into refined_clue.\n{format_instructions}",
+                                "Extract the Agent ID, start_time_utc8, and end_time_utc8 from the following revised clue. Place the revised clue verbatim into refined_clue.\n{format_instructions}",
                             ),
                             ("human", "{intent}"),
                         ]
@@ -480,8 +462,18 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
                 [
                     (
                         "system",
-                        "Convert the input into exactly one valid JSON object matching this schema.\n"
+                        "You are repairing a malformed output from an attack forensics planner agent. "
+                        
+                        "Determine which node the planner intended to route to:\n"
+                        "- 'Log_Retrieval_Node': Route here if the raw text describes a log data QUERY to be executed "
+                        "(contains parameters like agent, PID, query_type, event_ids, time range, or FETCH DATA blocks). "
+                        "The query has NOT been run yet — you MUST route to Log_Retrieval_Node with the query description as instruction.\n"
+                        "- 'MITRE_Expert_Node': Route here if the text mentions a MITRE ATT&CK technique ID (Txxxx).\n"
+                        "- 'Reporter_Node': Route ONLY if the text explicitly says the investigation is complete and "
+                        "wants to generate a final report. Do NOT route here if the text describes a data query.\n\n"
+
                         "CRITICAL OVERRIDE: You MUST NOT wrap the result in a 'properties' dictionary. Return the flat object directly.\n"
+                        "Convert the input into exactly one valid JSON object matching this schema:\n"
                         "{format_instructions}",
                     ),
                     ("human", "{raw_text}"),
@@ -1086,15 +1078,15 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
             ],
             "next_action_fromDecisionNode": None,
         }
-    elif instruction == "ASK_MITRE":
-        return {
-            "messages": [
-                AIMessage(
-                    content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
-                )
-            ],
-            "next_action_fromDecisionNode": None,
-        }
+    # elif instruction == "ASK_MITRE":
+    #     return {
+    #         "messages": [
+    #             AIMessage(
+    #                 content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
+    #             )
+    #         ],
+    #         "next_action_fromDecisionNode": None,
+    #     }
 
     return {"next_action_fromDecisionNode": None}
 
@@ -1262,7 +1254,9 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
         return {
             "svg_chart": svg_code,
             "messages": [
-                AIMessage(content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
+                AIMessage(
+                    content=f"{final_report}\n\n---\n\n攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
+                )
             ],
         }
 

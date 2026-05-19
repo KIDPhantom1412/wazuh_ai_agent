@@ -26,13 +26,13 @@ custom_http_client = httpx.Client(
 )
 
 llm_attribution_params = {
-    "model": settings.TEST_LLM_MODEL,
-    "api_key": settings.TEST_LLM_API_KEY,
-    "base_url": settings.TEST_LLM_BASE_URL,
+    "model": settings.ATTRIBUTION_LLM_MODEL,
+    "api_key": settings.ATTRIBUTION_API_KEY,
+    "base_url": settings.ATTRIBUTION_LLM_BASE_URL,
     "http_client": custom_http_client,
 }
 
-special_kwargs = get_model_kwargs(settings.TEST_LLM_MODEL)
+special_kwargs = get_model_kwargs(settings.ATTRIBUTION_LLM_MODEL)
 if special_kwargs:
     llm_attribution_params["model_kwargs"] = special_kwargs
 

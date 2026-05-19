@@ -270,9 +270,10 @@ def get_router_agent(
         task: str,
         reset_context: bool = False,
     ) -> str:
-        """将单个攻击溯源相关子任务委派给 `attack_attribution`。
-        适用于线索确认、日志调查、攻击链分析、生成调查报告。一次只处理一个明确子任务。
-        如果用户请求包含多个溯源动作，请拆分后多次调用本工具。
+        """将攻击溯源相关任务委派给 `attack_attribution`。
+        适用于线索确认、日志查询、攻击链调查、生成溯源报告等。
+        注意：attack_attribution 内部有自主调查规划节点，会自行制定具体的调查策略。
+        你只需将用户的原始请求原样传入 `task`，不要去进一步拆解用户的需求。例如，不要新增 MITRE ID、调查步骤清单、进程追踪方向等。
         当这是一个新的独立溯源工作流时，将 `reset_context` 设为 true。
         """
 
@@ -316,6 +317,18 @@ def get_router_agent(
 - 如果你忘了先确认，`delegate_rule_generator` 会返回 `approval_required=true`；此时你必须停止执行并向用户征求授权。
 - 如果问题不需要 specialist，直接回答，不要强行调工具。
 - 工具返回的是 specialist 的结果和状态摘要。你要根据这些结果继续规划，而不是机械转述。
+
+关于委托攻击溯源：
+- attack_attribution 内部有专业的攻击溯源规划节点，会自主制定调查策略。你的 `task` 只需传入用户的原始请求，不要加工、拆解或细化（如添加 MITRE ID、调查步骤清单、进程追踪方向等）。让 specialist 自己决定怎么做。
+- 当 `state_summary` 中 `pending_question_type` 为 "CLUE" 时，说明攻击溯源等待用户确认线索。你**唯一**要做的就是将 `reply` 逐字原样输出给用户，**严格禁止**任何形式的重新排版、总结、提取要点、Markdown 表格、分段概括或操作指引。
+
+  假如 `reply` 原文是：
+  "系统检测到原始日志输入。我为您提取了如下调查线索：\n\n『Agent 003 触发了 Level 12 的告警（Rule 57100: Suspicious process execution by wmic.exe）。告警显示进程 wmic.exe (PID 8840) 调用了 cmd.exe (PID 9012) 执行了异常脚本，操作用户为 WORKGROUP\\admin。时间范围限定在北京时间 2026-03-10 09:15 至 09:35 之间（北京时间）。』\n\n请问该线索是否符合您的要求？（如果您同意，请回复"是"；如需修改时间范围等信息，请直接指出）"
+
+  错误做法：说一句"攻击溯源系统已提取调查线索如下"然后加一个 Markdown 表格列出"受感染主机 / 告警规则 / 可疑进程 / MITRE 技术"等项目——这是违规，因为你在重新排版和总结。
+  正确做法：把上面那段原文一字不改地发给用户。
+
+  收到用户回复后将用户原话作为 `task` 传入，`reset_context=false`。
 
 示例：
 - 用户说“先删除 id 为 100100 的规则，再去验证，最后生成说明”
