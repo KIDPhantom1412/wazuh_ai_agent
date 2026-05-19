@@ -27,6 +27,35 @@
         "message": "All selected rules were returned",
         "error": 0
     },
+    "rules_query_response": {
+        "data": {
+            "affected_items": [
+                {
+                    "id": 5764,
+                    "level": 10,
+                    "description": "Multiple SSH login attempts using non-existent usernames.",
+                    "groups": ["syslog", "sshd", "authentication_failed"],
+                    "filename": "0575-win-base_rules.xml",
+                    "mitre": {"id": ["T1110"], "tactic": ["Credential Access"]}
+                }
+            ],
+            "total_affected_items": 1,
+            "total_failed_items": 0,
+            "failed_items": []
+        },
+        "message": "All selected rules were returned",
+        "error": 0
+    },
+    "rules_query_empty_response": {
+        "data": {
+            "affected_items": [],
+            "total_affected_items": 0,
+            "total_failed_items": 0,
+            "failed_items": []
+        },
+        "message": "All selected rules were returned",
+        "error": 0
+    },
     "count_agent_alerts_response": {
         "count": 2116,
         "_shards": {

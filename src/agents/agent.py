@@ -5,7 +5,7 @@ from agents.attack_attribution.attack_attributor import get_attack_attribution_a
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
 from agents.router_agent import get_router_agent
-from agents.rule_generator.rule_generator import get_rule_generator_agent
+from agents.rule_agent.rule_agent import get_rule_agent
 from core.config import settings
 from core.model_configs import get_model_kwargs
 
@@ -40,6 +40,6 @@ model_attribution = ChatOpenAI(**llm_attribution_params)
 
 demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
-rule_generator = get_rule_generator_agent(model)
+rule_agent = get_rule_agent(model)
 attack_attributor = get_attack_attribution_agent(model_attribution)
 router_agent = get_router_agent(model, rule_model=model, attack_model=model_attribution)

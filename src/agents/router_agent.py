@@ -8,7 +8,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.config import get_config
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
-from agents.rule_generator.rule_generator import get_rule_generator_agent
+from agents.rule_agent.rule_agent import get_rule_agent
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def _get_thread_session(
             "latest_plan_steps": [],
             "executed_steps": [],
             "specialist_state_cache": {
-                "rule_generator": None,
+                "rule_agent": None,
                 "attack_attribution": None,
             },
         }
@@ -170,7 +170,7 @@ def _invoke_specialist(
     )
 
     reply = _extract_latest_ai_content(result.get("messages"))
-    if specialist_name == "rule_generator":
+    if specialist_name == "rule_agent":
         state_summary = _summarize_rule_state(result)
     else:
         state_summary = _summarize_attack_state(result)
@@ -196,7 +196,7 @@ def get_router_agent(
     rule_model: BaseChatModel | None = None,
     attack_model: BaseChatModel | None = None,
 ):
-    rule_agent = get_rule_generator_agent(rule_model or router_model)
+    rule_agent = get_rule_agent(rule_model or router_model)
     attack_agent = get_attack_attribution_agent(attack_model or router_model)
     session_cache_by_thread: dict[str, dict[str, Any]] = {}
 
@@ -226,23 +226,21 @@ def get_router_agent(
         )
 
     @tool
-    def delegate_rule_generator(
+    def delegate_rule_agent(
         task: str,
         reset_context: bool = False,
     ) -> str:
-        """将单个 Wazuh 规则相关子任务委派给 `rule_generator`。
-        适用于创建、修改、解释、验证、删除规则。一次只处理一个明确子任务。
+        """将单个 Wazuh 规则相关子任务委派给 `rule_agent`。
+        适用于创建、修改、解释、查询、列出、验证、删除规则，以及查询规则文件、规则组和 requirement 相关规则。一次只处理一个明确子任务。
         如果用户请求包含多个规则动作，请拆分后多次调用本工具。
         当这是一个新的独立规则工作流时，将 `reset_context` 设为 true。
         """
 
-        logger.info(
-            "Delegating task to rule_generator. reset_context=%s task=%s", reset_context, task
-        )
+        logger.info("Delegating task to rule_agent. reset_context=%s task=%s", reset_context, task)
         if _is_high_risk_rule_task(task) and not _has_explicit_user_authorization(task):
             return json.dumps(
                 {
-                    "specialist": "rule_generator",
+                    "specialist": "rule_agent",
                     "thread_id": _get_thread_id(),
                     "task": task,
                     "approval_required": True,
@@ -258,7 +256,7 @@ def get_router_agent(
                 ensure_ascii=False,
             )
         return _invoke_specialist(
-            specialist_name="rule_generator",
+            specialist_name="rule_agent",
             session_cache_by_thread=session_cache_by_thread,
             specialist_app=rule_agent,
             task=task,
@@ -304,7 +302,7 @@ def get_router_agent(
 一、可用工具
 ══════════════════════════════════════════════════════
 - `write_task_plan`：为当前线程会话记录任务计划摘要与步骤。多步骤请求必须先调用它。
-- `delegate_rule_generator`：处理 Wazuh 规则创建、修改、解释、验证、删除。
+- `delegate_rule_agent`：处理 Wazuh 规则创建、修改、解释、查询、列出、验证、删除；也处理规则文件、规则组、requirement 相关规则查询。
 - `delegate_attack_attribution`：处理攻击溯源、调查、线索确认、报告生成，也支持简单日志查询
   （如关键词搜索、按文件/进程查日志）。系统内部会自动判断任务类型并选择合适的处理路径。
 
@@ -326,24 +324,25 @@ def get_router_agent(
   - 继续同一 specialist 的上下文时 `reset_context=false`；新独立任务时 `reset_context=true`。
 
 ══════════════════════════════════════════════════════
-三、委托规则生成器 (delegate_rule_generator)
+三、委托规则智能体 (delegate_rule_agent)
 ══════════════════════════════════════════════════════
+【任务分类】
+  - 只读任务（低风险，无需授权）：规则查询、列出规则、列出规则文件、查看某个规则文件、列出规则组、查询 requirement 相关规则。此类任务通常是新的独立任务，除非用户明确说"继续刚才的查询"，否则 `reset_context=true`。
+  - 高风险任务（必须授权）：规则验证、应用、上传、覆盖、删除、清理、重启 Wazuh manager、启用/停用规则。
+
 【高风险操作授权】
-  高风险动作包括但不限于：规则验证、应用、上传、覆盖、删除、清理、重启 Wazuh manager、启用/停用规则。
   对上述高风险动作，你必须先向用户说明风险并询问是否继续，获得明确同意后才能执行。
   用户同意后，传入的 `task` 文本中必须包含"已获用户明确授权"这句标记。
-  如果忘记先确认，`delegate_rule_generator` 会返回 `approval_required=true`，此时必须停止并向用户征求授权。
+  如果忘记先确认，`delegate_rule_agent` 会返回 `approval_required=true`，此时必须停止并向用户征求授权。
 
 【示例：高风险多步骤任务】
-  用户："先删除 id 为 100100 的规则，再去验证，最后生成说明"
-  步骤 1 — 向用户说明风险（包含删除和验证两个高风险动作），等待确认。
-  步骤 2 — 用户确认后，调用 `write_task_plan` 列出三步：
-          ① 删除规则  ② 验证配置  ③ 生成处理说明
-  步骤 3 — 依次调用 `delegate_rule_generator`：
-          task="已获用户明确授权：删除 id 为 100100 的规则", reset_context=true
-          task="已获用户明确授权：验证刚才处理的规则", reset_context=false
-          task="基于前面执行结果生成处理说明", reset_context=false
-  步骤 4 — 汇总结果回复用户。
+  - 用户说“先删除 id 为 100100 的规则，再去验证，最后生成说明”
+  你应先说明这包含高风险动作，需要用户确认。
+  - 用户确认后，你可以先调用 `write_task_plan(...)` 列出三步，
+  再调用 `delegate_rule_agent(task="已获用户明确授权：删除 id 为 100100 的规则", reset_context=true)`，
+  然后调用 `delegate_rule_agent(task="已获用户明确授权：验证刚才处理的规则", reset_context=false)`，
+  最后调用 `delegate_rule_agent(task="基于前面执行结果生成处理说明", reset_context=false)`，
+  再汇总结果。
 
 ══════════════════════════════════════════════════════
 四、委托攻击溯源 (delegate_attack_attribution)
@@ -391,6 +390,6 @@ def get_router_agent(
 
     return create_agent(
         model=router_model,
-        tools=[write_task_plan, delegate_rule_generator, delegate_attack_attribution],
+        tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution],
         system_prompt=system_prompt,
     )
