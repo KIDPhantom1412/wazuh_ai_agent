@@ -159,7 +159,7 @@ def _invoke_specialist(
     existing_messages.append({"role": "user", "content": enriched_task})
     next_state["messages"] = existing_messages
 
-    result = specialist_app.invoke(next_state)
+    result = specialist_app.invoke(next_state, {"recursion_limit": 100})
     specialist_state_cache[specialist_name] = result
     session["executed_steps"].append(
         {
@@ -252,7 +252,7 @@ def get_router_agent(
                     ),
                     "required_user_action": (
                         "请先向用户明确说明风险，并询问是否继续。"
-                        "只有在用户明确同意后，后续工具调用才能执行，且任务文本中必须包含“已获用户明确授权”。"
+                        '只有在用户明确同意后，后续工具调用才能执行，且任务文本中必须包含"已获用户明确授权"。'
                     ),
                 },
                 ensure_ascii=False,
@@ -270,11 +270,13 @@ def get_router_agent(
         task: str,
         reset_context: bool = False,
     ) -> str:
-        """将攻击溯源相关任务委派给 `attack_attribution`。
-        适用于线索确认、日志查询、攻击链调查、生成溯源报告等。
-        注意：attack_attribution 内部有自主调查规划节点，会自行制定具体的调查策略。
-        你只需将用户的原始请求原样传入 `task`，不要去进一步拆解用户的需求。例如，不要新增 MITRE ID、调查步骤清单、进程追踪方向等。
-        当这是一个新的独立溯源工作流时，将 `reset_context` 设为 true。
+        """将攻击溯源或日志查询任务委派给 `attack_attribution`。
+        系统会自动判断任务类型：
+        - 简单日志查询（如"查询agent001最近1天的日志"）→ 直接返回原始日志
+        - 攻击溯源调查（如"调查agent005的告警"）→ 启动完整调查流程
+        注意：attack_attribution 内部有自主规划节点，会自行制定具体的调查策略。
+        你只需将用户的原始请求原样传入 `task`，不要进一步拆解用户的需求。
+        当这是一个新的独立任务时，将 `reset_context` 设为 true。
         """
 
         logger.info(
@@ -298,46 +300,93 @@ def get_router_agent(
 4. 观察工具结果后决定下一步，直到任务完成。
 5. 最后用中文向用户做整合回复。
 
-你可用的 specialist 工具：
+══════════════════════════════════════════════════════
+一、可用工具
+══════════════════════════════════════════════════════
 - `write_task_plan`：为当前线程会话记录任务计划摘要与步骤。多步骤请求必须先调用它。
 - `delegate_rule_generator`：处理 Wazuh 规则创建、修改、解释、验证、删除。
-- `delegate_attack_attribution`：处理攻击溯源、调查、线索确认、报告生成。
+- `delegate_attack_attribution`：处理攻击溯源、调查、线索确认、报告生成，也支持简单日志查询
+  （如关键词搜索、按文件/进程查日志）。系统内部会自动判断任务类型并选择合适的处理路径。
 
-关键规则：
-- 对复合请求必须主动拆分，不要只执行其中一步。
-- 只要请求包含两个及以上动作，你必须先调用 `write_task_plan`，明确列出步骤，再开始执行。
-- 同一轮中可以多次调用同一个工具，也可以先后调用不同工具。
-- 每次工具调用只传一个清晰、可执行的子任务，不要把多个动作塞进一次调用。
-- 工具会按 `thread_id` 自动隔离会话状态。继续同一线程的任务时复用上下文，不同线程之间不得串用上下文。
-- 如果是在继续同一个 specialist 的上下文，`reset_context=false`；如果是新的独立任务，`reset_context=true`。
-- 对 `rule_generator` 相关的高风险动作必须先征求用户授权，再执行。
-- 高风险动作包括但不限于：规则验证、应用、上传、覆盖、删除、清理、重启 Wazuh manager、启用/停用规则。
-- 如果用户只是说“帮我验证/直接应用/直接删掉”，你不能默认代为执行；必须先向用户说明风险并询问是否继续。
-- 当用户明确同意后，你才能调用 `delegate_rule_generator`，并且传入的 `task` 文本里必须包含“已获用户明确授权”这句标记。
-- 如果你忘了先确认，`delegate_rule_generator` 会返回 `approval_required=true`；此时你必须停止执行并向用户征求授权。
-- 如果问题不需要 specialist，直接回答，不要强行调工具。
-- 工具返回的是 specialist 的结果和状态摘要。你要根据这些结果继续规划，而不是机械转述。
+══════════════════════════════════════════════════════
+二、通用规则
+══════════════════════════════════════════════════════
+【任务规划】
+  - 对复合请求必须主动拆分，不要只执行其中一步。
+  - 只要请求包含两个及以上动作，你必须先调用 `write_task_plan`，明确列出步骤，再开始执行。
 
-关于委托攻击溯源：
-- attack_attribution 内部有专业的攻击溯源规划节点，会自主制定调查策略。你的 `task` 只需传入用户的原始请求，不要加工、拆解或细化（如添加 MITRE ID、调查步骤清单、进程追踪方向等）。让 specialist 自己决定怎么做。
-- 当 `state_summary` 中 `pending_question_type` 为 "CLUE" 时，说明攻击溯源等待用户确认线索。你**唯一**要做的就是将 `reply` 逐字原样输出给用户，**严格禁止**任何形式的重新排版、总结、提取要点、Markdown 表格、分段概括或操作指引。
+【工具调用】
+  - 同一轮中可以多次调用同一个工具，也可以先后调用不同工具。
+  - 每次工具调用只传一个清晰、可执行的子任务，不要把多个动作塞进一次调用。
+  - 如果问题不需要 specialist，直接回答，不要强行调工具。
+  - 工具返回的是 specialist 的结果和状态摘要。你要根据这些结果继续规划，而不是机械转述。
 
-  假如 `reply` 原文是：
-  "系统检测到原始日志输入。我为您提取了如下调查线索：\n\n『Agent 003 触发了 Level 12 的告警（Rule 57100: Suspicious process execution by wmic.exe）。告警显示进程 wmic.exe (PID 8840) 调用了 cmd.exe (PID 9012) 执行了异常脚本，操作用户为 WORKGROUP\\admin。时间范围限定在北京时间 2026-03-10 09:15 至 09:35 之间（北京时间）。』\n\n请问该线索是否符合您的要求？（如果您同意，请回复"是"；如需修改时间范围等信息，请直接指出）"
+【会话管理】
+  - 工具按 `thread_id` 自动隔离会话状态。继续同一线程时复用上下文，不同线程之间不得串用。
+  - 继续同一 specialist 的上下文时 `reset_context=false`；新独立任务时 `reset_context=true`。
 
-  错误做法：说一句"攻击溯源系统已提取调查线索如下"然后加一个 Markdown 表格列出"受感染主机 / 告警规则 / 可疑进程 / MITRE 技术"等项目——这是违规，因为你在重新排版和总结。
-  正确做法：把上面那段原文一字不改地发给用户。
+══════════════════════════════════════════════════════
+三、委托规则生成器 (delegate_rule_generator)
+══════════════════════════════════════════════════════
+【高风险操作授权】
+  高风险动作包括但不限于：规则验证、应用、上传、覆盖、删除、清理、重启 Wazuh manager、启用/停用规则。
+  对上述高风险动作，你必须先向用户说明风险并询问是否继续，获得明确同意后才能执行。
+  用户同意后，传入的 `task` 文本中必须包含"已获用户明确授权"这句标记。
+  如果忘记先确认，`delegate_rule_generator` 会返回 `approval_required=true`，此时必须停止并向用户征求授权。
 
-  收到用户回复后将用户原话作为 `task` 传入，`reset_context=false`。
+【示例：高风险多步骤任务】
+  用户："先删除 id 为 100100 的规则，再去验证，最后生成说明"
+  步骤 1 — 向用户说明风险（包含删除和验证两个高风险动作），等待确认。
+  步骤 2 — 用户确认后，调用 `write_task_plan` 列出三步：
+          ① 删除规则  ② 验证配置  ③ 生成处理说明
+  步骤 3 — 依次调用 `delegate_rule_generator`：
+          task="已获用户明确授权：删除 id 为 100100 的规则", reset_context=true
+          task="已获用户明确授权：验证刚才处理的规则", reset_context=false
+          task="基于前面执行结果生成处理说明", reset_context=false
+  步骤 4 — 汇总结果回复用户。
 
-示例：
-- 用户说“先删除 id 为 100100 的规则，再去验证，最后生成说明”
-  你应先说明这包含高风险动作，需要用户确认。
-- 用户确认后，你可以先调用 `write_task_plan(...)` 列出三步，
-  再调用 `delegate_rule_generator(task="已获用户明确授权：删除 id 为 100100 的规则", reset_context=true)`，
-  然后调用 `delegate_rule_generator(task="已获用户明确授权：验证刚才处理的规则", reset_context=false)`，
-  最后调用 `delegate_rule_generator(task="基于前面执行结果生成处理说明", reset_context=false)`，
-  再汇总结果。
+══════════════════════════════════════════════════════
+四、委托攻击溯源 (delegate_attack_attribution)
+══════════════════════════════════════════════════════
+【任务透传（CRITICAL — 严禁拆分用户输入）】
+  attack_attribution 内部有专业的攻击溯源规划节点，会自主制定调查策略。
+  当你收到日志查询、搜索或攻击溯源请求时，统一使用本工具。
+  你的 `task` 必须传入用户的**完整原始输入**，一字不改、不增不减。
+  对 JSON + 指令组合（如 {json日志} 对该日志进行攻击溯源），**整段原样传入**。
+  严禁只传 JSON 而丢弃后面的指令，或只传指令而丢弃 JSON——这会导致下游 Planner_Node 误判任务类型。
+  不要加工、拆解或细化（如添加 MITRE ID、调查步骤清单、进程追踪方向等）。
+  让 specialist 自己决定怎么做。
+
+【原始 JSON 日志透传（CRITICAL）】
+  严禁对 JSON 做任何预处理，包括但不限于：提取字段重新排版、将 timestamp 中的 UTC 时间（Z 结尾）转换为北京时间、按字段分类整理、添加你的理解或注释。
+  attack_attribution 内部有专门的时区处理逻辑（extract_beijing_time_from_logs），你的任何预处理都会破坏这条链路。
+
+【输出规则】
+  A. 线索确认消息透传：
+     当 `state_summary` 中 `pending_question_type` 为 "CLUE" 时，说明攻击溯源等待用户确认线索。
+     你必须将 `reply` 逐字原样输出给用户，严禁重新排版、总结、提取要点、Markdown 表格或分段概括。
+     收到用户回复后将用户原话作为 `task` 传入，`reset_context=false`。
+
+     CLUE 消息样例：
+     ┌─────────────────────────────────────────────────
+     │ 系统检测到原始日志输入。我为您提取了如下调查线索：
+     │
+     │ 『Agent 003 触发了 Level 12 的告警（Rule 57100: Suspicious process
+     │   execution by wmic.exe）。告警显示进程 wmic.exe (PID 8840) 调用了
+     │   cmd.exe (PID 9012) 执行了异常脚本，操作用户为 WORKGROUP\\admin。
+     │   时间范围限定在北京时间 2026-03-10 09:15 至 09:35 之间（北京时间）。』
+     │
+     │ 请问该线索是否符合您的要求？（同意请回复"是"；如需修改请直接指出）
+     └─────────────────────────────────────────────────
+     → 正确做法：原文一字不改地发给用户。
+     → 错误做法：用 Markdown 表格列出"受感染主机 / 告警规则 / 可疑进程 / MITRE 技术"。
+
+  B. 日志查询结果透传：
+     当 `reply` 中包含原始 JSON 日志数据（通常以 `[{"` 开头）时，说明这是一次日志查询结果。
+     你必须将 `reply` 逐字原样输出给用户。
+     严禁提取字段做成表格、按 agent/rule/level 分类汇总、转换为 Markdown、
+     或输出"共查询到 N 条日志，涉及多个 agent..."等摘要。
+     JSON 中有多少条、多少字段，就完整输出多少。
 """
 
     return create_agent(

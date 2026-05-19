@@ -27,9 +27,16 @@ def merge_executed_queries(
     return left + right
 
 
+class PlannerActionCommand(BaseModel):
+    target: Literal["Simple_Log_Query_Node", "Attribution_Decision_Node"] = Field(
+        description="The target node to route to from Planner_Node."
+    )
+    instruction: str = Field(default="", description="Optional instruction for the target node.")
+
+
 class DecisionActionCommand(BaseModel):
-    target: Literal["User_Input_Node", "Attribution_Planner_Node", "Decision_Node"] = Field(
-        description="The target node to route to from Decision_Node."
+    target: Literal["User_Input_Node", "Attribution_Planner_Node", "Attribution_Decision_Node"] = (
+        Field(description="The target node to route to from Attribution_Decision_Node.")
     )
     instruction: str = Field(default="", description="Optional instruction for the target node.")
 
@@ -47,6 +54,7 @@ class AttributionPlannerActionCommand(BaseModel):
 class AttributionState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
+    next_action_fromPlannerNode: PlannerActionCommand | None
     next_action_fromDecisionNode: DecisionActionCommand | None
     next_action_fromAttributionPlannerNode: AttributionPlannerActionCommand | None
 

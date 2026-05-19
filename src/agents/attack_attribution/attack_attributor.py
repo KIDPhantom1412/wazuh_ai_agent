@@ -6,12 +6,14 @@ from langgraph.graph import END, StateGraph
 
 # 导入所有定义好的节点
 from .nodes import (
+    attribution_decision_node,
     attribution_planner_node,
-    decision_node,
     information_synthesizer_node,
     log_retrieval_node,
     mitre_expert_node,
+    planner_node,
     reporter_node,
+    simple_log_query_node,
     user_input_node,
     visualization_node,
 )
@@ -23,20 +25,34 @@ logger = logging.getLogger(__name__)
 # 定义条件路由函数
 
 
-def route_decision(state: AttributionState) -> str:
-    """decision node 的出口路由"""
+def route_planner(state: AttributionState) -> str:
+    """planner node 的出口路由"""
+    next_action = state.get("next_action_fromPlannerNode")
+    if not next_action:
+        return END
+    target = next_action.get("target")
+    return target if target in ["Simple_Log_Query_Node", "Attribution_Decision_Node"] else END
+
+
+def route_attribution_decision(state: AttributionState) -> str:
+    """attribution_decision node 的出口路由"""
     next_action = state.get("next_action_fromDecisionNode")
     if not next_action:
         return END
     target = next_action.get("target")
     return (
         target
-        if target in ["User_Input_Node", "Attribution_Planner_Node", "Decision_Node"]
+        if target
+        in [
+            "User_Input_Node",
+            "Attribution_Planner_Node",
+            "Attribution_Decision_Node",
+        ]
         else END
     )
 
 
-def route_planner(state: AttributionState) -> str:
+def route_attribution_planner(state: AttributionState) -> str:
     """attribution_planner_node节点的出口路由"""
     next_action = state.get("next_action_fromAttributionPlannerNode")
     if not next_action:
@@ -67,7 +83,8 @@ def get_attack_attribution_agent(model: BaseChatModel):
     # 初始化状态图
     graph = StateGraph(AttributionState)
 
-    graph.add_node("Decision_Node", partial(decision_node, model=model))
+    graph.add_node("Planner_Node", partial(planner_node, model=model))
+    graph.add_node("Attribution_Decision_Node", partial(attribution_decision_node, model=model))
     graph.add_node("Attribution_Planner_Node", partial(attribution_planner_node, model=model))
     graph.add_node("Log_Retrieval_Node", partial(log_retrieval_node, model=model))
     graph.add_node(
@@ -77,23 +94,34 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_node("Reporter_Node", partial(reporter_node, model=model))
     graph.add_node("User_Input_Node", partial(user_input_node, model=model))
     graph.add_node("Visualization_Node", partial(visualization_node, model=model))
+    graph.add_node("Simple_Log_Query_Node", partial(simple_log_query_node, model=model))
 
-    graph.set_entry_point("Decision_Node")
+    graph.set_entry_point("Planner_Node")
 
     graph.add_conditional_edges(
-        "Decision_Node",
-        route_decision,
+        "Planner_Node",
+        route_planner,
+        {
+            "Simple_Log_Query_Node": "Simple_Log_Query_Node",
+            "Attribution_Decision_Node": "Attribution_Decision_Node",
+            END: END,
+        },
+    )
+
+    graph.add_conditional_edges(
+        "Attribution_Decision_Node",
+        route_attribution_decision,
         {
             "User_Input_Node": "User_Input_Node",
             "Attribution_Planner_Node": "Attribution_Planner_Node",
-            "Decision_Node": "Decision_Node",
+            "Attribution_Decision_Node": "Attribution_Decision_Node",
             END: END,
         },
     )
 
     graph.add_conditional_edges(
         "Attribution_Planner_Node",
-        route_planner,
+        route_attribution_planner,
         {
             "Log_Retrieval_Node": "Log_Retrieval_Node",
             "MITRE_Expert_Node": "MITRE_Expert_Node",
@@ -108,6 +136,7 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_edge("Reporter_Node", "Visualization_Node")
     graph.add_edge("Visualization_Node", END)
     graph.add_edge("User_Input_Node", END)
+    graph.add_edge("Simple_Log_Query_Node", END)
 
     app = graph.compile()
 
