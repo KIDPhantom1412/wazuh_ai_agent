@@ -7,6 +7,7 @@ from agents.indexer_agent import get_indexer_agent
 from agents.router_agent import get_router_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 from core.config import settings
+from core.model_configs import get_model_kwargs
 
 model = ChatOpenAI(
     model=settings.TEST_LLM_MODEL,
@@ -24,13 +25,18 @@ custom_http_client = httpx.Client(
     )
 )
 
-model_attribution = ChatOpenAI(
-    model=settings.TEST_LLM_MODEL,
-    api_key=settings.TEST_LLM_API_KEY,
-    base_url=settings.TEST_LLM_BASE_URL,
-    http_client=custom_http_client,
-    # model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},  //禁用思考模式
-)
+llm_attribution_params = {
+    "model": settings.ATTRIBUTION_LLM_MODEL,
+    "api_key": settings.ATTRIBUTION_API_KEY,
+    "base_url": settings.ATTRIBUTION_LLM_BASE_URL,
+    "http_client": custom_http_client,
+}
+
+special_kwargs = get_model_kwargs(settings.ATTRIBUTION_LLM_MODEL)
+if special_kwargs:
+    llm_attribution_params["model_kwargs"] = special_kwargs
+
+model_attribution = ChatOpenAI(**llm_attribution_params)
 
 demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)

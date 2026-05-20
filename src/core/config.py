@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     WAZUH_INDEXER_PASSWORD: str = "?bk5+GvTVeKBtL7J5wcSMmenR8Hk+lue"
     WAZUH_INDEXER_PORT: str = "9200"
 
-    TEST_LLM_MODEL: str | None
-    TEST_LLM_API_KEY: str | None
-    TEST_LLM_BASE_URL: str | None
+    TEST_LLM_MODEL: str | None = None
+    TEST_LLM_API_KEY: str | None = None
+    TEST_LLM_BASE_URL: str | None = None
+
+    ATTRIBUTION_LLM_MODEL: str | None = None
+    ATTRIBUTION_API_KEY: str | None = None
+    ATTRIBUTION_LLM_BASE_URL: str | None = None
 
     LANGSMITH_TRACING: bool = False
     LANGSMITH_ENDPOINT: str | None = None

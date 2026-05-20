@@ -18,6 +18,11 @@ corepack prepare pnpm@latest --activate
 cd frontend
 pnpm install
 ```
+### 如果pnpm install出现报错的解决办法
+
+```bash
+pnpm approve-builds
+```
 
 ### 启动前端开发服务
 

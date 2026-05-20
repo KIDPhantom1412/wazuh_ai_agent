@@ -1,5 +1,7 @@
+import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from wazuh_api.server_api import list_agents
@@ -107,6 +109,90 @@ def extract_agent_ip_mapping() -> dict[str, str]:
         logger.info(f"Exception occurred while extracting Agent IP mapping: {e}")
 
     return ip_mapping
+
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def extract_beijing_time_from_logs(text: str) -> dict | None:
+    """
+    扫描用户输入中的 Wazuh/ES 日志，提取 _source.timestamp 作为唯一时间来源。
+    _source.timestamp 已包含时区信息（如 +0800），无需额外转换。
+
+    Returns:
+        dict with keys beijing_start, beijing_end (ISO8601 +08:00),
+        beijing_display (人类可读字符串)。未找到时间戳返回 None。
+    """
+    timestamps = []
+
+    try:
+        parsed = json.loads(text)
+        _collect_source_timestamps(parsed, timestamps)
+    except json.JSONDecodeError:
+        pass
+
+    if not timestamps:
+        for candidate in _iter_json_candidates(text):
+            try:
+                obj = json.loads(candidate)
+                _collect_source_timestamps(obj, timestamps)
+            except json.JSONDecodeError:
+                continue
+
+    if not timestamps:
+        return None
+
+    timestamps.sort()
+    earliest = timestamps[0]
+    latest = timestamps[-1]
+
+    # 统一归一化到北京时间，以防少数 agent 时区不同
+    window_start = (earliest - timedelta(minutes=10)).astimezone(BEIJING_TZ)
+    window_end = (latest + timedelta(minutes=10)).astimezone(BEIJING_TZ)
+
+    return {
+        "beijing_start": window_start.isoformat(),
+        "beijing_end": window_end.isoformat(),
+        "beijing_display": f"{window_start.strftime('%Y-%m-%d %H:%M:%S')} 至 "
+        f"{window_end.strftime('%Y-%m-%d %H:%M:%S')}（北京时间）",
+    }
+
+
+def _collect_source_timestamps(obj, out_list: list):
+    """递归收集 _source.timestamp（已含时区信息）。"""
+    if isinstance(obj, dict):
+        source = obj.get("_source")
+        if isinstance(source, dict):
+            ts = source.get("timestamp")
+            if isinstance(ts, str):
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    if dt not in out_list:
+                        out_list.append(dt)
+                except (ValueError, TypeError):
+                    pass
+
+        for v in obj.values():
+            _collect_source_timestamps(v, out_list)
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_source_timestamps(item, out_list)
+
+
+def _iter_json_candidates(text: str):
+    """从任意文本中提取平衡大括号的 JSON 候选片段。"""
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                yield text[start : i + 1]
+                start = -1
 
 
 if __name__ == "__main__":

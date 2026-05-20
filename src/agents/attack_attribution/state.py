@@ -16,9 +16,27 @@ def merge_kb(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     return new_kb
 
 
+def merge_executed_queries(
+    left: list[dict[str, Any]], right: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """追加已执行查询指纹"""
+    if not left:
+        left = []
+    if not right:
+        return left
+    return left + right
+
+
+class PlannerActionCommand(BaseModel):
+    target: Literal["Simple_Log_Query_Node", "Attribution_Decision_Node"] = Field(
+        description="The target node to route to from Planner_Node."
+    )
+    instruction: str = Field(default="", description="Optional instruction for the target node.")
+
+
 class DecisionActionCommand(BaseModel):
-    target: Literal["User_Input_Node", "Attribution_Planner_Node", "Decision_Node"] = Field(
-        description="The target node to route to from Decision_Node."
+    target: Literal["User_Input_Node", "Attribution_Planner_Node", "Attribution_Decision_Node"] = (
+        Field(description="The target node to route to from Attribution_Decision_Node.")
     )
     instruction: str = Field(default="", description="Optional instruction for the target node.")
 
@@ -36,11 +54,15 @@ class AttributionPlannerActionCommand(BaseModel):
 class AttributionState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
+    next_action_fromPlannerNode: PlannerActionCommand | None
     next_action_fromDecisionNode: DecisionActionCommand | None
     next_action_fromAttributionPlannerNode: AttributionPlannerActionCommand | None
 
     # 原始日志暂存
     current_raw_logs: list[dict[str, Any]] | None
+
+    # 已执行查询指纹 (防重复查询)
+    executed_queries: Annotated[list[dict[str, Any]], merge_executed_queries]
 
     # 外部知识库
     mitre_knowledge_base: Annotated[dict[str, str], merge_kb]
