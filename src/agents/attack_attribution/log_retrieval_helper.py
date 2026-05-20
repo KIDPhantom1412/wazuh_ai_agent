@@ -48,6 +48,8 @@ def get_archives_by_keyword(
     if end_time:
         end_time = _format_iso8601(end_time)
 
+    x_limit = min(x_limit, 20)
+
     search_results = agent_archives(
         agent_id,
         keyword=keyword,
@@ -435,7 +437,7 @@ def get_archives_by_eventid(
         - "SECURITY_ID" : 按安全标识符 (SID) 追踪。
     :param query_value: 【可选】与 query_type 对应的具体数值。不传则不做值匹配。样例说明：
         - 若为 PROCESS_ID 或 PARENT_PROCESS_ID: 传入pid "6536" 或 "0x1d26"
-        - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\"
+        - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\b.jsp"
         - 若为 IP_ADDRESS: 传入 "192.168.1.50"
         - 若为 PORT: 传入 "2024"
         - 若为 SERVICE_NAME: 传入"WMI"
